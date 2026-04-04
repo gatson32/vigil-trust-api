@@ -15,3 +15,18 @@ services:
     healthCheckTimeout: 5
     healthCheckStartPeriod: 10
     maxShutdownDelaySeconds: 30
+
+  - type: worker
+    name: vigil-discord-bot
+    runtime: node
+    plan: free
+    rootDir: discord-bot
+    buildCommand: npm install
+    startCommand: node bot.js
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        value: "1490088109419921508"
+      - key: NODE_ENV
+        value: production
