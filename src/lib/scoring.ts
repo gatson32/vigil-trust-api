@@ -1,0 +1,248 @@
+// VIGIL Trust Score Algorithm v1
+// Scores agents 0-100 based on on-chain behavior from Virtuals Protocol
+
+export interface AgentRaw {
+  id: number;
+  documentId: string;
+  name: string;
+  description: string;
+  walletAddress: string;
+  profilePic: string | null;
+  category: string;
+  tokenAddress: string | null;
+  symbol: string | null;
+  twitterHandle: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastActiveAt: string | null;
+  successfulJobCount: number;
+  successRate: number;
+  uniqueBuyerCount: number;
+  transactionCount: number;
+  grossAgenticAmount: number;
+  hasGraduated: boolean;
+  walletBalance: string;
+  isHighRisk: boolean | null;
+  jobs: Array<{ id: number; name: string; type: string; price: number }>;
+  resources: Array<unknown>;
+  offerings: Array<{ id: number; name: string; price: number; priceUsd: number }>;
+  enabledChains: Array<{ id: number; name: string }>;
+  metrics: {
+    successfulJobCount: number;
+    successRate: number;
+    uniqueBuyerCount: number;
+    isOnline: boolean;
+    minsFromLastOnlineTime: number;
+    transactionCount: number;
+    grossAgenticAmount: number;
+    revenue: number | null;
+    rating: number | null;
+    lastActiveAt: string | null;
+  };
+  revenue: number | null;
+  rating: number | null;
+  role: string | null;
+  cluster: string | null;
+}
+
+export interface ScoredAgent {
+  // Identity
+  name: string;
+  documentId: string;
+  walletAddress: string;
+  profilePic: string | null;
+  description: string;
+  category: string;
+  symbol: string | null;
+  twitterHandle: string | null;
+  cluster: string | null;
+  role: string | null;
+  hasGraduated: boolean;
+  isOnline: boolean;
+
+  // Raw metrics
+  successRate: number;
+  successfulJobCount: number;
+  uniqueBuyerCount: number;
+  transactionCount: number;
+  grossAgenticAmount: number;
+  walletBalance: number;
+  jobCount: number;
+  resourceCount: number;
+  offeringCount: number;
+  chainCount: number;
+  accountAgeDays: number;
+  daysSinceActive: number;
+  revenue: number;
+
+  // VIGIL Score Breakdown (each 0-100, weighted)
+  reliabilityScore: number;   // 30% — success rate + job volume
+  activityScore: number;      // 25% — recency + transaction volume
+  economicScore: number;      // 20% — revenue + aGDP + wallet health
+  reputationScore: number;    // 15% — unique buyers + graduation + offerings
+  longevityScore: number;     // 10% — account age + consistency
+
+  // Final
+  trustScore: number;         // 0-100 composite
+  trustTier: 'ELITE' | 'TRUSTED' | 'ESTABLISHED' | 'EMERGING' | 'NEW' | 'INACTIVE' | 'HIGH_RISK';
+  riskFlags: string[];
+}
+
+// Scoring weights
+const WEIGHTS = {
+  reliability: 0.30,
+  activity: 0.25,
+  economic: 0.20,
+  reputation: 0.15,
+  longevity: 0.10,
+};
+
+// Normalize a value to 0-100 using logarithmic scaling for heavy-tailed distributions
+function logNorm(value: number, _median: number, max: number): number {
+  if (value <= 0) return 0;
+  const normalized = Math.log(1 + value) / Math.log(1 + max);
+  return Math.min(100, Math.round(normalized * 100));
+}
+
+// Linear normalize
+function linearNorm(value: number, max: number): number {
+  if (max <= 0) return 0;
+  return Math.min(100, Math.round((value / max) * 100));
+}
+
+export function scoreAgent(agent: AgentRaw): ScoredAgent {
+  const now = Date.now();
+  const createdAt = new Date(agent.createdAt).getTime();
+  const lastActive = agent.lastActiveAt ? new Date(agent.lastActiveAt).getTime() : createdAt;
+  const accountAgeDays = Math.max(1, (now - createdAt) / (1000 * 60 * 60 * 24));
+  const daysSinceActive = Math.max(0, (now - lastActive) / (1000 * 60 * 60 * 24));
+  const walletBalance = parseFloat(agent.walletBalance || '0');
+  const revenue = agent.revenue || agent.metrics?.revenue || 0;
+  const isOnline = agent.metrics?.isOnline || false;
+
+  const riskFlags: string[] = [];
+
+  // === RELIABILITY (30%) ===
+  const srScore = Math.min(100, Math.max(0, agent.successRate));
+  const volumeScore = logNorm(agent.successfulJobCount, 100, 1_200_000);
+  const reliabilityScore = agent.successfulJobCount === 0
+    ? 0
+    : Math.round(srScore * 0.6 + volumeScore * 0.4);
+
+  // === ACTIVITY (25%) ===
+  let recencyScore: number;
+  if (daysSinceActive <= 1) recencyScore = 100;
+  else if (daysSinceActive <= 7) recencyScore = 85;
+  else if (daysSinceActive <= 30) recencyScore = 60;
+  else if (daysSinceActive <= 90) recencyScore = 30;
+  else if (daysSinceActive <= 180) recencyScore = 10;
+  else recencyScore = 0;
+
+  const txScore = logNorm(agent.transactionCount, 1000, 1_200_000);
+  const onlineBonus = isOnline ? 10 : 0;
+  const activityScore = Math.min(100, Math.round(recencyScore * 0.5 + txScore * 0.4 + onlineBonus));
+
+  // === ECONOMIC (20%) ===
+  const agdpScore = logNorm(agent.grossAgenticAmount, 10000, 220_000_000);
+  const revenueScore = logNorm(revenue, 1000, 600_000);
+  const balanceScore = walletBalance > 0 ? Math.min(30, logNorm(walletBalance, 10, 10000)) : 0;
+  const economicScore = Math.round(agdpScore * 0.5 + revenueScore * 0.35 + balanceScore * 0.15);
+
+  // === REPUTATION (15%) ===
+  const buyerScore = logNorm(agent.uniqueBuyerCount, 100, 8000);
+  const graduationBonus = agent.hasGraduated ? 20 : 0;
+  const offeringScore = Math.min(30, (agent.offerings?.length || 0) * 10);
+  const reputationScore = Math.min(100, Math.round(buyerScore * 0.5 + graduationBonus + offeringScore));
+
+  // === LONGEVITY (10%) ===
+  const ageScore = linearNorm(Math.min(accountAgeDays, 365), 365);
+  const activeRatio = accountAgeDays > 0
+    ? Math.max(0, 1 - (daysSinceActive / accountAgeDays))
+    : 0;
+  const consistencyScore = Math.round(activeRatio * 100);
+  const longevityScore = Math.round(ageScore * 0.6 + consistencyScore * 0.4);
+
+  // === COMPOSITE SCORE ===
+  let trustScore = Math.min(100, Math.round(
+    reliabilityScore * WEIGHTS.reliability +
+    activityScore * WEIGHTS.activity +
+    economicScore * WEIGHTS.economic +
+    reputationScore * WEIGHTS.reputation +
+    longevityScore * WEIGHTS.longevity
+  ));
+
+  // === RISK FLAGS ===
+  if (agent.isHighRisk) {
+    riskFlags.push('FLAGGED_HIGH_RISK');
+    trustScore = Math.min(trustScore, 20);
+  }
+  if (agent.successRate < 50 && agent.successfulJobCount > 100) {
+    riskFlags.push('LOW_SUCCESS_RATE');
+  }
+  if (daysSinceActive > 90) {
+    riskFlags.push('DORMANT');
+  }
+  if (agent.successfulJobCount === 0 && agent.transactionCount === 0) {
+    riskFlags.push('NO_ACTIVITY');
+  }
+  if (walletBalance <= 0 && agent.successfulJobCount > 0) {
+    riskFlags.push('EMPTY_WALLET');
+  }
+
+  // === TIER ===
+  let trustTier: ScoredAgent['trustTier'];
+  if (agent.isHighRisk) trustTier = 'HIGH_RISK';
+  else if (daysSinceActive > 180 && agent.successfulJobCount === 0) trustTier = 'INACTIVE';
+  else if (trustScore >= 80) trustTier = 'ELITE';
+  else if (trustScore >= 60) trustTier = 'TRUSTED';
+  else if (trustScore >= 40) trustTier = 'ESTABLISHED';
+  else if (trustScore >= 20) trustTier = 'EMERGING';
+  else trustTier = 'NEW';
+
+  return {
+    name: agent.name,
+    documentId: agent.documentId,
+    walletAddress: agent.walletAddress,
+    profilePic: agent.profilePic,
+    description: agent.description || '',
+    category: agent.category || 'UNKNOWN',
+    symbol: agent.symbol,
+    twitterHandle: agent.twitterHandle,
+    cluster: agent.cluster,
+    role: agent.role,
+    hasGraduated: agent.hasGraduated,
+    isOnline,
+    successRate: agent.successRate,
+    successfulJobCount: agent.successfulJobCount,
+    uniqueBuyerCount: agent.uniqueBuyerCount,
+    transactionCount: agent.transactionCount,
+    grossAgenticAmount: agent.grossAgenticAmount,
+    walletBalance,
+    jobCount: agent.jobs?.length || 0,
+    resourceCount: agent.resources?.length || 0,
+    offeringCount: agent.offerings?.length || 0,
+    chainCount: agent.enabledChains?.length || 0,
+    accountAgeDays: Math.round(accountAgeDays),
+    daysSinceActive: Math.round(daysSinceActive),
+    revenue,
+    reliabilityScore,
+    activityScore,
+    economicScore,
+    reputationScore,
+    longevityScore,
+    trustScore,
+    trustTier,
+    riskFlags,
+  };
+}
+
+// Tier config for UI
+export const TIER_CONFIG = {
+  ELITE:       { label: 'Elite',       color: '#00ff88', bg: 'rgba(0,255,136,0.1)', icon: '◆' },
+  TRUSTED:     { label: 'Trusted',     color: '#00ccff', bg: 'rgba(0,204,255,0.1)', icon: '◇' },
+  ESTABLISHED: { label: 'Established', color: '#ffaa00', bg: 'rgba(255,170,0,0.1)', icon: '○' },
+  EMERGING:    { label: 'Emerging',    color: '#ff6600', bg: 'rgba(255,102,0,0.1)', icon: '△' },
+  NEW:         { label: 'New',         color: '#888888', bg: 'rgba(136,136,136,0.1)', icon: '·' },
+  INACTIVE:    { label: 'Inactive',    color: '#444444', bg: 'rgba(68,68,68,0.1)',  icon: '✕' },
+  HIGH_RISK:   { label: 'High Risk',   color: '#ff0044', bg: 'rgba(255,0,68,0.1)',  icon: '⚠' },
+} as const;
