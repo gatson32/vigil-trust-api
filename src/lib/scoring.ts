@@ -110,26 +110,51 @@ function linearNorm(value: number, max: number): number {
   return Math.min(100, Math.round((value / max) * 100));
 }
 
+// Safe number coercion — returns 0 for NaN, null, undefined, non-numeric strings
+function safeNum(val: unknown, fallback: number = 0): number {
+  if (val === null || val === undefined) return fallback;
+  const n = typeof val === 'string' ? parseFloat(val) : Number(val);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// Validate that a date string parses to a valid timestamp
+function safeDate(val: string | null | undefined): number | null {
+  if (!val) return null;
+  const ts = new Date(val).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+
 export function scoreAgent(agent: AgentRaw): ScoredAgent {
   const now = Date.now();
-  const createdAt = new Date(agent.createdAt).getTime();
-  const lastActive = agent.lastActiveAt ? new Date(agent.lastActiveAt).getTime() : createdAt;
+  const createdAt = safeDate(agent.createdAt) ?? now; // fallback to now if unparseable
+  const lastActive = safeDate(agent.lastActiveAt) ?? createdAt;
   const accountAgeDays = Math.max(1, (now - createdAt) / (1000 * 60 * 60 * 24));
   const daysSinceActive = Math.max(0, (now - lastActive) / (1000 * 60 * 60 * 24));
-  const walletBalance = parseFloat(agent.walletBalance || '0');
-  const revenue = agent.revenue || agent.metrics?.revenue || 0;
-  const isOnline = agent.metrics?.isOnline || false;
+  const walletBalance = safeNum(agent.walletBalance, 0);
+  const revenue = safeNum(agent.revenue) || safeNum(agent.metrics?.revenue) || 0;
+  const isOnline = agent.metrics?.isOnline === true;
 
   const riskFlags: string[] = [];
 
+  // === Safe numeric extraction from raw agent ===
+  const successRate = safeNum(agent.successRate);
+  const successfulJobCount = safeNum(agent.successfulJobCount);
+  const uniqueBuyerCount = safeNum(agent.uniqueBuyerCount);
+  const transactionCount = safeNum(agent.transactionCount);
+  const grossAgenticAmount = safeNum(agent.grossAgenticAmount);
+
   // === RELIABILITY (30%) ===
-  const srScore = Math.min(100, Math.max(0, agent.successRate));
-  const volumeScore = logNorm(agent.successfulJobCount, 100, 1_200_000);
-  const reliabilityScore = agent.successfulJobCount === 0
+  // Success rate is the strongest signal
+  const srScore = Math.min(100, Math.max(0, successRate)); // Clamp to 0-100
+  // Volume matters — 1 job at 100% ≠ 10,000 jobs at 99%
+  const volumeScore = logNorm(successfulJobCount, 100, 1_200_000);
+  // Penalize zero jobs
+  const reliabilityScore = successfulJobCount === 0
     ? 0
     : Math.round(srScore * 0.6 + volumeScore * 0.4);
 
   // === ACTIVITY (25%) ===
+  // Recency — exponential decay
   let recencyScore: number;
   if (daysSinceActive <= 1) recencyScore = 100;
   else if (daysSinceActive <= 7) recencyScore = 85;
@@ -138,24 +163,25 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
   else if (daysSinceActive <= 180) recencyScore = 10;
   else recencyScore = 0;
 
-  const txScore = logNorm(agent.transactionCount, 1000, 1_200_000);
+  const txScore = logNorm(transactionCount, 1000, 1_200_000);
   const onlineBonus = isOnline ? 10 : 0;
   const activityScore = Math.min(100, Math.round(recencyScore * 0.5 + txScore * 0.4 + onlineBonus));
 
   // === ECONOMIC (20%) ===
-  const agdpScore = logNorm(agent.grossAgenticAmount, 10000, 220_000_000);
+  const agdpScore = logNorm(grossAgenticAmount, 10000, 220_000_000);
   const revenueScore = logNorm(revenue, 1000, 600_000);
   const balanceScore = walletBalance > 0 ? Math.min(30, logNorm(walletBalance, 10, 10000)) : 0;
   const economicScore = Math.round(agdpScore * 0.5 + revenueScore * 0.35 + balanceScore * 0.15);
 
   // === REPUTATION (15%) ===
-  const buyerScore = logNorm(agent.uniqueBuyerCount, 100, 8000);
+  const buyerScore = logNorm(uniqueBuyerCount, 100, 8000);
   const graduationBonus = agent.hasGraduated ? 20 : 0;
   const offeringScore = Math.min(30, (agent.offerings?.length || 0) * 10);
   const reputationScore = Math.min(100, Math.round(buyerScore * 0.5 + graduationBonus + offeringScore));
 
   // === LONGEVITY (10%) ===
   const ageScore = linearNorm(Math.min(accountAgeDays, 365), 365);
+  // Consistency: active for a good portion of their lifespan
   const activeRatio = accountAgeDays > 0
     ? Math.max(0, 1 - (daysSinceActive / accountAgeDays))
     : 0;
@@ -176,23 +202,23 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
     riskFlags.push('FLAGGED_HIGH_RISK');
     trustScore = Math.min(trustScore, 20);
   }
-  if (agent.successRate < 50 && agent.successfulJobCount > 100) {
+  if (successRate < 50 && successfulJobCount > 100) {
     riskFlags.push('LOW_SUCCESS_RATE');
   }
   if (daysSinceActive > 90) {
     riskFlags.push('DORMANT');
   }
-  if (agent.successfulJobCount === 0 && agent.transactionCount === 0) {
+  if (successfulJobCount === 0 && transactionCount === 0) {
     riskFlags.push('NO_ACTIVITY');
   }
-  if (walletBalance <= 0 && agent.successfulJobCount > 0) {
+  if (walletBalance <= 0 && successfulJobCount > 0) {
     riskFlags.push('EMPTY_WALLET');
   }
 
   // === TIER ===
   let trustTier: ScoredAgent['trustTier'];
   if (agent.isHighRisk) trustTier = 'HIGH_RISK';
-  else if (daysSinceActive > 180 && agent.successfulJobCount === 0) trustTier = 'INACTIVE';
+  else if (daysSinceActive > 180 && successfulJobCount === 0) trustTier = 'INACTIVE';
   else if (trustScore >= 80) trustTier = 'ELITE';
   else if (trustScore >= 60) trustTier = 'TRUSTED';
   else if (trustScore >= 40) trustTier = 'ESTABLISHED';
@@ -212,11 +238,11 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
     role: agent.role,
     hasGraduated: agent.hasGraduated,
     isOnline,
-    successRate: agent.successRate,
-    successfulJobCount: agent.successfulJobCount,
-    uniqueBuyerCount: agent.uniqueBuyerCount,
-    transactionCount: agent.transactionCount,
-    grossAgenticAmount: agent.grossAgenticAmount,
+    successRate,
+    successfulJobCount,
+    uniqueBuyerCount,
+    transactionCount,
+    grossAgenticAmount,
     walletBalance,
     jobCount: agent.jobs?.length || 0,
     resourceCount: agent.resources?.length || 0,

@@ -15,22 +15,159 @@ import { TTLCache } from './lib/cache.js';
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
 
-// Cache: 5 min for leaderboard/ecosystem, 2 min for individual scores
-const leaderboardCache = new TTLCache<unknown>(300);
-const scoreCache = new TTLCache<unknown>(120);
-const ecosystemCache = new TTLCache<unknown>(300);
+// ============================================================
+//  CONFIGURATION
+// ============================================================
 
-// --- Middleware ---
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  'https://vigiltrust.io',
+  'https://www.vigiltrust.io',
+  'http://localhost:5173',    // Vite dev
+  'http://localhost:3000',    // local dev
+];
+
+// Rate limiting — simple in-memory sliding window
+const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 minute
+const RATE_LIMIT_MAX = 60;            // 60 requests per minute per IP
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+
+function getRateLimitInfo(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  let entry = rateLimitStore.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitStore.set(ip, entry);
+  }
+
+  entry.count++;
+  const allowed = entry.count <= RATE_LIMIT_MAX;
+  const remaining = Math.max(0, RATE_LIMIT_MAX - entry.count);
+
+  return { allowed, remaining, resetAt: entry.resetAt };
+}
+
+// Clean up rate limit store periodically (every 5 min)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitStore) {
+    if (now > entry.resetAt) rateLimitStore.delete(ip);
+  }
+}, 300_000);
+
+// ============================================================
+//  CACHES
+// ============================================================
+
+const leaderboardCache = new TTLCache<unknown>(300);   // 5 min
+const scoreCache = new TTLCache<unknown>(120);         // 2 min
+const ecosystemCache = new TTLCache<unknown>(300);     // 5 min
+
+// Circuit breaker state for upstream Virtuals API
+let upstreamHealthy = true;
+let upstreamFailCount = 0;
+let upstreamLastFailure = 0;
+const UPSTREAM_FAIL_THRESHOLD = 3;
+const UPSTREAM_RECOVERY_MS = 30_000; // 30s cooldown before retrying
+
+function recordUpstreamSuccess() {
+  upstreamHealthy = true;
+  upstreamFailCount = 0;
+}
+
+function recordUpstreamFailure() {
+  upstreamFailCount++;
+  upstreamLastFailure = Date.now();
+  if (upstreamFailCount >= UPSTREAM_FAIL_THRESHOLD) {
+    upstreamHealthy = false;
+    console.warn(`[CIRCUIT BREAKER] Upstream marked unhealthy after ${upstreamFailCount} failures`);
+  }
+}
+
+function isUpstreamAvailable(): boolean {
+  if (upstreamHealthy) return true;
+  // Allow retry after cooldown
+  if (Date.now() - upstreamLastFailure > UPSTREAM_RECOVERY_MS) {
+    console.log('[CIRCUIT BREAKER] Cooldown elapsed, allowing retry');
+    return true;
+  }
+  return false;
+}
+
+// ============================================================
+//  MIDDLEWARE
+// ============================================================
+
+// CORS — restricted to known origins (falls back to open for API consumers)
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, server-to-server, mobile apps)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // For now, allow all origins but log unknown ones
+    // TODO: Restrict to API key holders only
+    console.log(`[CORS] Request from unlisted origin: ${origin}`);
+    return callback(null, true);
+  },
+  methods: ['GET'],
+  maxAge: 86400,
+}));
+
 app.use(express.json());
 
 // Request logging
 app.use((req, _res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+  console.log(`${new Date().toISOString()} ${req.method} ${req.path} [${req.ip}]`);
   next();
 });
 
-// --- Helper: format scored agent for API response ---
+// Rate limiting middleware
+app.use((req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const { allowed, remaining, resetAt } = getRateLimitInfo(ip);
+
+  res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX.toString());
+  res.setHeader('X-RateLimit-Remaining', remaining.toString());
+  res.setHeader('X-RateLimit-Reset', Math.ceil(resetAt / 1000).toString());
+
+  if (!allowed) {
+    return res.status(429).json({
+      error: 'Rate limit exceeded',
+      message: `Maximum ${RATE_LIMIT_MAX} requests per minute. Try again shortly.`,
+      retryAfter: Math.ceil((resetAt - Date.now()) / 1000),
+    });
+  }
+
+  next();
+});
+
+// ============================================================
+//  INPUT VALIDATION HELPERS
+// ============================================================
+
+function isValidIdentifier(id: string): boolean {
+  // Wallet address: 0x followed by 40 hex chars
+  if (/^0x[a-fA-F0-9]{40}$/.test(id)) return true;
+  // Document ID: alphanumeric, reasonable length
+  if (/^[a-zA-Z0-9_-]{1,100}$/.test(id)) return true;
+  return false;
+}
+
+function sanitizeSearchQuery(q: string): string {
+  // Remove any characters that could be used for injection
+  return q.replace(/[^\w\s\-_.]/g, '').trim().slice(0, 100);
+}
+
+function clampInt(value: string | undefined, min: number, max: number, defaultVal: number): number {
+  const parsed = parseInt(value as string);
+  if (isNaN(parsed)) return defaultVal;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+// ============================================================
+//  HELPER: format scored agent for API response
+// ============================================================
+
 function formatAgentResponse(agent: ScoredAgent) {
   return {
     name: agent.name,
@@ -80,22 +217,39 @@ function formatAgentResponse(agent: ScoredAgent) {
 app.get('/v1/health', (_req, res) => {
   res.json({
     status: 'ok',
-    version: '1.0.0',
+    version: '1.1.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
+    upstream: {
+      healthy: upstreamHealthy,
+      failCount: upstreamFailCount,
+    },
     cache: {
       leaderboard: leaderboardCache.size,
       scores: scoreCache.size,
       ecosystem: ecosystemCache.size,
     },
+    rateLimit: {
+      windowMs: RATE_LIMIT_WINDOW_MS,
+      maxRequests: RATE_LIMIT_MAX,
+      activeClients: rateLimitStore.size,
+    },
   });
 });
 
 // --- GET /v1/score/:identifier ---
-// Lookup by wallet address (0x...) or documentId
 app.get('/v1/score/:identifier', async (req, res) => {
   try {
     const { identifier } = req.params;
+
+    // Validate identifier
+    if (!isValidIdentifier(identifier)) {
+      return res.status(400).json({
+        error: 'Invalid identifier',
+        message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+      });
+    }
+
     const cacheKey = `score:${identifier.toLowerCase()}`;
 
     // Check cache
@@ -104,12 +258,26 @@ app.get('/v1/score/:identifier', async (req, res) => {
       return res.json({ data: cached, cached: true });
     }
 
+    // Circuit breaker check
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable. Try again in 30 seconds.',
+      });
+    }
+
     // Determine if wallet address or documentId
     let raw;
-    if (identifier.startsWith('0x') && identifier.length === 42) {
-      raw = await fetchAgentByWallet(identifier);
-    } else {
-      raw = await fetchAgentById(identifier);
+    try {
+      if (identifier.startsWith('0x') && identifier.length === 42) {
+        raw = await fetchAgentByWallet(identifier);
+      } else {
+        raw = await fetchAgentById(identifier);
+      }
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
     }
 
     if (!raw) {
@@ -134,15 +302,22 @@ app.get('/v1/score/:identifier', async (req, res) => {
 });
 
 // --- GET /v1/leaderboard ---
-// Paginated, sorted by trust score
 app.get('/v1/leaderboard', async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize as string) || 25));
+    const page = clampInt(req.query.page as string, 1, 100, 1);
+    const pageSize = clampInt(req.query.pageSize as string, 1, 100, 25);
     const tier = (req.query.tier as string)?.toUpperCase();
     const category = req.query.category as string;
     const sortBy = (req.query.sort as string) || 'trustScore';
     const order = (req.query.order as string)?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    // Validate tier if provided
+    if (tier && !(tier in TIER_CONFIG)) {
+      return res.status(400).json({
+        error: 'Invalid tier',
+        message: `Valid tiers: ${Object.keys(TIER_CONFIG).join(', ')}`,
+      });
+    }
 
     const cacheKey = `lb:${page}:${pageSize}:${tier || ''}:${category || ''}:${sortBy}:${order}`;
     const cached = leaderboardCache.get(cacheKey);
@@ -150,13 +325,29 @@ app.get('/v1/leaderboard', async (req, res) => {
       return res.json({ ...(cached as object), cached: true });
     }
 
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
+      });
+    }
+
     const fetchSize = Math.min(100, pageSize * 2);
-    const result = await fetchAgentsPage(page, fetchSize, 'grossAgenticAmount:desc');
+    let result;
+    try {
+      result = await fetchAgentsPage(page, fetchSize, 'grossAgenticAmount:desc');
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
     let agents = result.data.map(scoreAgent).map(formatAgentResponse);
 
     if (tier && tier in TIER_CONFIG) {
       agents = agents.filter(a => a.trustTier === tier);
     }
+
     if (category) {
       agents = agents.filter(a => a.category.toLowerCase() === category.toLowerCase());
     }
@@ -201,18 +392,41 @@ app.get('/v1/leaderboard', async (req, res) => {
 // --- GET /v1/search ---
 app.get('/v1/search', async (req, res) => {
   try {
-    const q = req.query.q as string;
-    if (!q || q.length < 2) {
+    const rawQ = req.query.q as string;
+    if (!rawQ || rawQ.length < 2) {
       return res.status(400).json({
         error: 'Invalid query',
         message: 'Search query must be at least 2 characters',
       });
     }
 
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize as string) || 10));
+    const q = sanitizeSearchQuery(rawQ);
+    if (q.length < 2) {
+      return res.status(400).json({
+        error: 'Invalid query',
+        message: 'Search query contains only invalid characters',
+      });
+    }
 
-    const result = await searchAgents(q, page, pageSize);
+    const page = clampInt(req.query.page as string, 1, 100, 1);
+    const pageSize = clampInt(req.query.pageSize as string, 1, 50, 10);
+
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
+      });
+    }
+
+    let result;
+    try {
+      result = await searchAgents(q, page, pageSize);
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
     const agents = result.data.map(scoreAgent).map(formatAgentResponse);
 
     return res.json({
@@ -235,7 +449,6 @@ app.get('/v1/search', async (req, res) => {
 });
 
 // --- GET /v1/ecosystem/health ---
-// Aggregated ecosystem statistics
 app.get('/v1/ecosystem/health', async (req, res) => {
   try {
     const cacheKey = 'ecosystem:health';
@@ -244,7 +457,22 @@ app.get('/v1/ecosystem/health', async (req, res) => {
       return res.json({ ...(cached as object), cached: true });
     }
 
-    const result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
+      });
+    }
+
+    let result;
+    try {
+      result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
     const agents = result.data.map(scoreAgent);
 
     const tierDistribution: Record<string, number> = {};
@@ -276,8 +504,8 @@ app.get('/v1/ecosystem/health', async (req, res) => {
         onlineCount,
         graduatedCount,
         totalJobs,
-        totalAgdp,
-        totalRevenue,
+        totalAgdp: Math.round(totalAgdp * 100) / 100,
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
         riskSummary: {
           flaggedCount: riskyAgents.length,
           commonFlags: Object.entries(
@@ -304,7 +532,6 @@ app.get('/v1/ecosystem/health', async (req, res) => {
 });
 
 // --- GET /v1/compare ---
-// Compare multiple agents side by side
 app.get('/v1/compare', async (req, res) => {
   try {
     const ids = (req.query.ids as string)?.split(',').map(s => s.trim()).filter(Boolean);
@@ -312,6 +539,23 @@ app.get('/v1/compare', async (req, res) => {
       return res.status(400).json({
         error: 'Invalid request',
         message: 'Provide 2-5 agent identifiers separated by commas',
+      });
+    }
+
+    // Validate each identifier
+    for (const id of ids) {
+      if (!isValidIdentifier(id)) {
+        return res.status(400).json({
+          error: 'Invalid identifier',
+          message: `Invalid identifier: "${id}". Must be a wallet address (0x...) or alphanumeric document ID`,
+        });
+      }
+    }
+
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
       });
     }
 
@@ -324,6 +568,12 @@ app.get('/v1/compare', async (req, res) => {
         return formatAgentResponse(scoreAgent(raw));
       })
     );
+
+    // Track upstream health
+    const anyFailed = results.some(r => r.status === 'rejected');
+    const anySucceeded = results.some(r => r.status === 'fulfilled');
+    if (anySucceeded) recordUpstreamSuccess();
+    if (anyFailed && !anySucceeded) recordUpstreamFailure();
 
     const agents = results.map((r, i) => ({
       identifier: ids[i],
@@ -340,7 +590,6 @@ app.get('/v1/compare', async (req, res) => {
 });
 
 // --- GET /v1/alerts ---
-// Agents with risk flags from current top agents
 app.get('/v1/alerts', async (req, res) => {
   try {
     const cacheKey = 'alerts:recent';
@@ -349,7 +598,22 @@ app.get('/v1/alerts', async (req, res) => {
       return res.json({ ...(cached as object), cached: true });
     }
 
-    const result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
+      });
+    }
+
+    let result;
+    try {
+      result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
     const agents = result.data.map(scoreAgent);
     const flagged = agents
       .filter(a => a.riskFlags.length > 0)
@@ -387,10 +651,10 @@ app.get('/v1/alerts', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'On-chain credit bureau for AI agents on Virtuals Protocol',
     endpoints: {
-      'GET /v1/health': 'Service health check',
+      'GET /v1/health': 'Service health check + upstream status + rate limit info',
       'GET /v1/score/:identifier': 'Trust score for a single agent (wallet address or documentId)',
       'GET /v1/leaderboard': 'Paginated agent rankings (query: page, pageSize, tier, category, sort, order)',
       'GET /v1/search?q=': 'Search agents by name or symbol',
@@ -417,10 +681,16 @@ app.get('/v1', (_req, res) => {
           key === 'INACTIVE' ? 'N/A' : 'Flagged',
       })),
     },
+    rateLimit: {
+      maxRequests: RATE_LIMIT_MAX,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+      note: 'Rate limit headers included in every response',
+    },
     links: {
-      dashboard: 'https://vigiltrust.io',
-      twitter: 'https://twitter.com/vigilonsol',
-      token: '0xFe1...f3BA6 (Base)',
+      twitter: 'https://twitter.com/VIGIL_Trust',
+      token: '0xFe19FEfC9B05d1a52e95C3d2a4daD0448C8f3BA6 (Base)',
+      acp: 'https://app.virtuals.io/acp/agents/alb3eav5ej58ynsqtbez7cd0',
+      github: 'https://github.com/gatson32/vigil-agent',
     },
   });
 });
@@ -437,12 +707,13 @@ app.use((_req, res) => {
 app.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════════════════╗
-║         VIGIL Trust Score API v1.0.0             ║
+║         VIGIL Trust Score API v1.1.0             ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
 ║  Docs:      http://localhost:${PORT}/v1            ║
 ║  Health:    http://localhost:${PORT}/v1/health     ║
+║  Rate Limit: ${RATE_LIMIT_MAX} req/min per IP             ║
 ╚══════════════════════════════════════════════════╝
   `);
 });
