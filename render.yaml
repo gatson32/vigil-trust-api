@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: vigil-trust-api
+    runtime: docker
+    plan: free
+    buildCommand: docker build -t vigil-trust-api .
+    dockerfile: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3100"
+    healthCheckPath: /v1/health
+    healthCheckInterval: 30
+    healthCheckTimeout: 5
+    healthCheckStartPeriod: 10
+    maxShutdownDelaySeconds: 30
