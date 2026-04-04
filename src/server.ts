@@ -11,6 +11,13 @@ import {
   searchAgents,
 } from './lib/virtuals-client.js';
 import { TTLCache } from './lib/cache.js';
+import {
+  recordSnapshot,
+  getHistory,
+  getScoreDeltas,
+  getHistoryStats,
+  getRecentMovers,
+} from './lib/history.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -217,7 +224,7 @@ function formatAgentResponse(agent: ScoredAgent) {
 app.get('/v1/health', (_req, res) => {
   res.json({
     status: 'ok',
-    version: '1.1.0',
+    version: '1.2.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -234,6 +241,7 @@ app.get('/v1/health', (_req, res) => {
       maxRequests: RATE_LIMIT_MAX,
       activeClients: rateLimitStore.size,
     },
+    history: getHistoryStats(),
   });
 });
 
@@ -291,6 +299,18 @@ app.get('/v1/score/:identifier', async (req, res) => {
     const response = formatAgentResponse(scored);
     scoreCache.set(cacheKey, response);
 
+    // Record history snapshot (non-blocking)
+    recordSnapshot(scored.walletAddress, scored.name, {
+      trustScore: scored.trustScore,
+      trustTier: scored.trustTier,
+      reliabilityScore: scored.reliabilityScore,
+      activityScore: scored.activityScore,
+      economicScore: scored.economicScore,
+      reputationScore: scored.reputationScore,
+      longevityScore: scored.longevityScore,
+      riskFlags: scored.riskFlags,
+    });
+
     return res.json({ data: response, cached: false });
   } catch (err) {
     console.error('Score lookup error:', err);
@@ -342,7 +362,17 @@ app.get('/v1/leaderboard', async (req, res) => {
       throw upstreamErr;
     }
 
-    let agents = result.data.map(scoreAgent).map(formatAgentResponse);
+    const scoredAgents = result.data.map(scoreAgent);
+    // Record history for all scored agents (non-blocking batch)
+    for (const s of scoredAgents) {
+      recordSnapshot(s.walletAddress, s.name, {
+        trustScore: s.trustScore, trustTier: s.trustTier,
+        reliabilityScore: s.reliabilityScore, activityScore: s.activityScore,
+        economicScore: s.economicScore, reputationScore: s.reputationScore,
+        longevityScore: s.longevityScore, riskFlags: s.riskFlags,
+      });
+    }
+    let agents = scoredAgents.map(formatAgentResponse);
 
     if (tier && tier in TIER_CONFIG) {
       agents = agents.filter(a => a.trustTier === tier);
@@ -647,11 +677,67 @@ app.get('/v1/alerts', async (req, res) => {
   }
 });
 
+// --- GET /v1/history/:walletAddress ---
+app.get('/v1/history/:walletAddress', (req, res) => {
+  const wallet = req.params.walletAddress;
+  if (!isValidIdentifier(wallet) || !wallet.startsWith('0x')) {
+    return res.status(400).json({
+      error: 'Invalid wallet address',
+      message: 'History requires a valid wallet address (0x...)',
+    });
+  }
+
+  const history = getHistory(wallet);
+  if (!history) {
+    return res.status(404).json({
+      error: 'No history found',
+      message: 'No score history recorded for this agent yet. Query /v1/score/:address first.',
+    });
+  }
+
+  const hoursBack = clampInt(req.query.hours as string, 1, 168, 24);
+  const deltas = getScoreDeltas(wallet, hoursBack);
+
+  return res.json({
+    data: {
+      walletAddress: history.walletAddress,
+      name: history.name,
+      firstSeen: new Date(history.firstSeen).toISOString(),
+      lastUpdated: new Date(history.lastUpdated).toISOString(),
+      snapshotCount: history.snapshots.length,
+      snapshots: history.snapshots.map(s => ({
+        ...s,
+        timestamp: new Date(s.timestamp).toISOString(),
+      })),
+      deltas,
+    },
+  });
+});
+
+// --- GET /v1/movers ---
+app.get('/v1/movers', (req, res) => {
+  const hoursBack = clampInt(req.query.hours as string, 1, 168, 24);
+  const limit = clampInt(req.query.limit as string, 1, 50, 10);
+  const movers = getRecentMovers(hoursBack, limit);
+
+  return res.json({
+    data: movers.map(m => ({
+      ...m,
+      changeDirection: m.change > 0 ? '↑' : m.change < 0 ? '↓' : '—',
+    })),
+    meta: {
+      hoursBack,
+      timestamp: new Date().toISOString(),
+      ...getHistoryStats(),
+    },
+  });
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.1.0',
+    version: '1.2.0',
     description: 'On-chain credit bureau for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -661,6 +747,8 @@ app.get('/v1', (_req, res) => {
       'GET /v1/ecosystem/health': 'Aggregated ecosystem statistics',
       'GET /v1/compare?ids=id1,id2': 'Compare 2-5 agents side by side',
       'GET /v1/alerts': 'Agents with active risk flags',
+      'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
+      'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
     },
     scoring: {
       dimensions: {
