@@ -1,0 +1,29 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "dockerfile",
+    "dockerfile": "Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "unless_stopped",
+    "restartPolicyMaxRetries": 10,
+    "startCommand": "npx tsx src/server.ts",
+    "healthchecks": {
+      "readiness": {
+        "path": "/v1/health",
+        "initialDelaySeconds": 5,
+        "periodSeconds": 30,
+        "timeoutSeconds": 5,
+        "failureThreshold": 3
+      }
+    },
+    "ports": [
+      {
+        "name": "http",
+        "port": 3100,
+        "protocol": "TCP"
+      }
+    ]
+  }
+}
