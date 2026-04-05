@@ -239,7 +239,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.4.0',
+    version: '1.5.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -949,12 +949,50 @@ app.get('/v1/movers', async (req, res) => {
   });
 });
 
+// --- POST /v1/evaluate ---
+// ACP-compatible evaluator endpoint — score a seller agent before approving a job
+app.post('/v1/evaluate', async (req, res) => {
+  try {
+    const { jobId, buyerAddress, sellerAddress, deliverable, serviceRequirement, memos } = req.body;
+
+    if (!sellerAddress) {
+      return res.status(400).json({
+        error: 'Missing required field',
+        message: 'sellerAddress is required for evaluation',
+      });
+    }
+
+    // Dynamic import to avoid loading evaluator module at startup
+    const { evaluateJob } = await import('./lib/evaluator.js');
+
+    const result = await evaluateJob({
+      jobId: jobId || 'manual',
+      buyerAddress: buyerAddress || 'unknown',
+      sellerAddress,
+      deliverable: deliverable || { type: 'unknown', value: null },
+      serviceRequirement: serviceRequirement || null,
+      memos: memos || [],
+    });
+
+    return res.json({
+      data: result,
+      cached: false,
+    });
+  } catch (err) {
+    console.error('Evaluation error:', err);
+    return res.status(502).json({
+      error: 'Evaluation failed',
+      message: 'Failed to evaluate agent. ' + (err as Error).message,
+    });
+  }
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.4.0',
-    description: 'On-chain credit bureau for AI agents on Virtuals Protocol',
+    version: '1.5.0',
+    description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
       'GET /v1/score/:identifier': 'Trust score for a single agent (wallet address or documentId)',
@@ -967,6 +1005,7 @@ app.get('/v1', (_req, res) => {
       'GET /v1/alerts': 'Agents with active risk flags',
       'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
       'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
+      'POST /v1/evaluate': 'ACP evaluator — score seller trustworthiness before approving a job (body: {sellerAddress, jobId?, buyerAddress?, deliverable?})',
     },
     scoring: {
       dimensions: {

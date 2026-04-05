@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@virtuals-protocol/acp-node": "^0.3.0-beta.40",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "pg": "^8.13.0"
