@@ -239,7 +239,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.5.0',
+    version: '1.6.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -987,11 +987,186 @@ app.post('/v1/evaluate', async (req, res) => {
   }
 });
 
+// --- Batch Evaluation ---
+// Score multiple agents in one call — perfect for portfolio risk checks
+app.post('/v1/evaluate/batch', async (req, res) => {
+  try {
+    const { addresses } = req.body;
+
+    if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
+      return res.status(400).json({
+        error: 'Missing required field',
+        message: 'addresses must be a non-empty array of wallet addresses',
+      });
+    }
+
+    if (addresses.length > 20) {
+      return res.status(400).json({
+        error: 'Too many addresses',
+        message: 'Maximum 20 addresses per batch request',
+      });
+    }
+
+    const { evaluateJob } = await import('./lib/evaluator.js');
+    const startTime = Date.now();
+
+    const results = await Promise.allSettled(
+      addresses.map((addr: string) =>
+        evaluateJob({
+          jobId: 'batch',
+          buyerAddress: 'batch-caller',
+          sellerAddress: addr,
+          deliverable: { type: 'batch', value: null },
+          serviceRequirement: null,
+          memos: [],
+        })
+      )
+    );
+
+    const evaluations = results.map((r, i) => ({
+      address: addresses[i],
+      ...(r.status === 'fulfilled'
+        ? { success: true, ...r.value }
+        : { success: false, error: (r.reason as Error).message }),
+    }));
+
+    // Summary stats
+    const successful = evaluations.filter((e: any) => e.success);
+    const approved = successful.filter((e: any) => e.approved);
+    const rejected = successful.filter((e: any) => !e.approved);
+    const avgScore = successful.length > 0
+      ? Math.round(successful.reduce((sum: number, e: any) => sum + (e.sellerTrustScore || 0), 0) / successful.length)
+      : 0;
+
+    return res.json({
+      data: {
+        evaluations,
+        summary: {
+          total: addresses.length,
+          approved: approved.length,
+          rejected: rejected.length,
+          failed: results.filter(r => r.status === 'rejected').length,
+          avgTrustScore: avgScore,
+          batchDurationMs: Date.now() - startTime,
+        },
+      },
+      cached: false,
+    });
+  } catch (err) {
+    console.error('Batch evaluation error:', err);
+    return res.status(502).json({
+      error: 'Batch evaluation failed',
+      message: (err as Error).message,
+    });
+  }
+});
+
+// --- Watchlist / Portfolio Monitor ---
+// Check a set of agents and flag any changes or risks since last check
+app.post('/v1/watchlist/check', async (req, res) => {
+  try {
+    const { addresses, thresholds } = req.body;
+
+    if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
+      return res.status(400).json({
+        error: 'Missing required field',
+        message: 'addresses must be a non-empty array of wallet addresses',
+      });
+    }
+
+    if (addresses.length > 50) {
+      return res.status(400).json({
+        error: 'Too many addresses',
+        message: 'Maximum 50 addresses per watchlist check',
+      });
+    }
+
+    const minScore = thresholds?.minScore ?? 25;
+    const flagOnRiskFlags = thresholds?.flagOnRiskFlags ?? true;
+    const startTime = Date.now();
+
+    // Score all agents in parallel
+    const results = await Promise.allSettled(
+      addresses.map(async (addr: string) => {
+        if (!isUpstreamAvailable()) throw new Error('Upstream unavailable');
+        const raw = await fetchAgentByWallet(addr);
+        if (!raw) throw new Error(`Agent not found: ${addr}`);
+        recordUpstreamSuccess();
+        const scored = scoreAgent(raw);
+        const context: SentinelContext = {
+          allAgents: [scored],
+          scanTimestamp: Date.now(),
+        };
+        const sentinel = assessAgent(scored, context);
+        return { scored, sentinel };
+      })
+    );
+
+    const agents = results.map((r, i) => {
+      if (r.status === 'rejected') {
+        return {
+          address: addresses[i],
+          status: 'error' as const,
+          error: (r.reason as Error).message,
+        };
+      }
+
+      const { scored, sentinel } = r.value;
+      const alerts: string[] = [];
+
+      if (scored.trustScore < minScore) {
+        alerts.push(`SCORE_BELOW_THRESHOLD: ${scored.trustScore} < ${minScore}`);
+      }
+      if (flagOnRiskFlags && scored.riskFlags.length > 0) {
+        alerts.push(`RISK_FLAGS: ${scored.riskFlags.join(', ')}`);
+      }
+      if (sentinel.threatLevel === 'CRITICAL' || sentinel.threatLevel === 'EMERGENCY') {
+        alerts.push(`SENTINEL_THREAT: ${sentinel.threatLevel}`);
+      }
+
+      return {
+        address: addresses[i],
+        name: scored.name,
+        status: alerts.length > 0 ? 'alert' as const : 'ok' as const,
+        trustScore: scored.trustScore,
+        trustTier: scored.trustTier,
+        riskFlags: scored.riskFlags,
+        sentinelThreat: sentinel.threatLevel,
+        alerts,
+      };
+    });
+
+    const alertCount = agents.filter(a => a.status === 'alert').length;
+    const errorCount = agents.filter(a => a.status === 'error').length;
+
+    return res.json({
+      data: {
+        agents,
+        summary: {
+          total: addresses.length,
+          ok: agents.filter(a => a.status === 'ok').length,
+          alerts: alertCount,
+          errors: errorCount,
+          checkDurationMs: Date.now() - startTime,
+        },
+        thresholds: { minScore, flagOnRiskFlags },
+      },
+      cached: false,
+    });
+  } catch (err) {
+    console.error('Watchlist check error:', err);
+    return res.status(502).json({
+      error: 'Watchlist check failed',
+      message: (err as Error).message,
+    });
+  }
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.5.0',
+    version: '1.6.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1006,6 +1181,8 @@ app.get('/v1', (_req, res) => {
       'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
       'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
       'POST /v1/evaluate': 'ACP evaluator — score seller trustworthiness before approving a job (body: {sellerAddress, jobId?, buyerAddress?, deliverable?})',
+      'POST /v1/evaluate/batch': 'Batch evaluate up to 20 agents at once (body: {addresses: string[]})',
+      'POST /v1/watchlist/check': 'Monitor a portfolio of agents for risk changes (body: {addresses: string[], thresholds?: {minScore?, flagOnRiskFlags?}})',
     },
     scoring: {
       dimensions: {
