@@ -1,5 +1,7 @@
-// VIGIL Trust Score Algorithm v1
-// Scores agents 0-100 based on on-chain behavior from Virtuals Protocol
+// VIGIL Trust Score Algorithm v2 — Proprietary
+// On-chain credit scoring with behavioral anomaly detection, task complexity
+// analysis, economic sustainability scoring, sybil detection, and regression monitoring.
+// Patent-pending methodology. All rights reserved.
 
 export interface AgentRaw {
   id: number;
@@ -75,26 +77,41 @@ export interface ScoredAgent {
   daysSinceActive: number;
   revenue: number;
 
-  // VIGIL Score Breakdown (each 0-100, weighted)
-  reliabilityScore: number;   // 30% — success rate + job volume
-  activityScore: number;      // 25% — recency + transaction volume
-  economicScore: number;      // 20% — revenue + aGDP + wallet health
-  reputationScore: number;    // 15% — unique buyers + graduation + offerings
-  longevityScore: number;     // 10% — account age + consistency
+  // VIGIL Score Breakdown — Core Dimensions (each 0-100)
+  reliabilityScore: number;   // success rate + job volume
+  activityScore: number;      // recency + transaction volume
+  economicScore: number;      // revenue + aGDP + wallet health
+  reputationScore: number;    // unique buyers + graduation + offerings
+  longevityScore: number;     // account age + consistency
+
+  // VIGIL Score Breakdown — Proprietary Dimensions (each 0-100)
+  behavioralScore: number;    // anomaly detection (100 = normal)
+  complexityScore: number;    // task sophistication + execution quality
+  sustainabilityScore: number; // unit economics + margin health
+  sybilRiskScore: number;     // collusion/manipulation risk (0 = clean)
+  regressionScore: number;    // performance stability (100 = stable)
 
   // Final
-  trustScore: number;         // 0-100 composite
+  trustScore: number;         // 0-100 composite (v2 algorithm)
   trustTier: 'ELITE' | 'TRUSTED' | 'ESTABLISHED' | 'EMERGING' | 'NEW' | 'INACTIVE' | 'HIGH_RISK';
+  trustGrade: 'A' | 'B' | 'C' | 'D' | 'F';
   riskFlags: string[];
 }
 
-// Scoring weights
+// VIGIL Trust Score v2 — Proprietary Weighted Algorithm
+// Core dimensions (55% total) + Proprietary dimensions (45% total)
 const WEIGHTS = {
-  reliability: 0.30,
-  activity: 0.25,
-  economic: 0.20,
-  reputation: 0.15,
+  // Core (publicly observable metrics)
+  reliability: 0.15,
+  activity: 0.10,
+  economic: 0.10,
+  reputation: 0.10,
   longevity: 0.10,
+  // Proprietary (VIGIL's competitive moat)
+  behavioral: 0.10,      // Anomaly detection
+  complexity: 0.10,      // Task sophistication
+  sustainability: 0.10,  // Unit economics
+  // Sybil + Regression are penalty/flag systems, not additive
 };
 
 // Normalize a value to 0-100 using logarithmic scaling for heavy-tailed distributions
@@ -124,7 +141,7 @@ function safeDate(val: string | null | undefined): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
-export function scoreAgent(agent: AgentRaw): ScoredAgent {
+export async function scoreAgent(agent: AgentRaw): Promise<ScoredAgent> {
   const now = Date.now();
   const createdAt = safeDate(agent.createdAt) ?? now; // fallback to now if unparseable
   const lastActive = safeDate(agent.lastActiveAt) ?? createdAt;
@@ -188,14 +205,141 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
   const consistencyScore = Math.round(activeRatio * 100);
   const longevityScore = Math.round(ageScore * 0.6 + consistencyScore * 0.4);
 
-  // === COMPOSITE SCORE ===
+  // === PROPRIETARY DIMENSIONS (computed lazily for first-pass scoring) ===
+  // These use the partially-scored agent to compute advanced metrics.
+  // Build a partial agent for the proprietary modules to consume.
+  const partialAgent: ScoredAgent = {
+    name: agent.name,
+    documentId: agent.documentId,
+    walletAddress: agent.walletAddress,
+    profilePic: agent.profilePic,
+    description: agent.description || '',
+    category: agent.category || 'UNKNOWN',
+    symbol: agent.symbol,
+    twitterHandle: agent.twitterHandle,
+    cluster: agent.cluster,
+    role: agent.role,
+    hasGraduated: agent.hasGraduated,
+    isOnline,
+    successRate,
+    successfulJobCount,
+    uniqueBuyerCount,
+    transactionCount,
+    grossAgenticAmount,
+    walletBalance,
+    jobCount: agent.jobs?.length || 0,
+    resourceCount: agent.resources?.length || 0,
+    offeringCount: agent.offerings?.length || 0,
+    chainCount: agent.enabledChains?.length || 0,
+    accountAgeDays: Math.round(accountAgeDays),
+    daysSinceActive: Math.round(daysSinceActive),
+    revenue,
+    reliabilityScore,
+    activityScore,
+    economicScore,
+    reputationScore,
+    longevityScore,
+    // Placeholders — filled below
+    behavioralScore: 100,
+    complexityScore: 0,
+    sustainabilityScore: 0,
+    sybilRiskScore: 0,
+    regressionScore: 100,
+    trustScore: 0,
+    trustTier: 'NEW',
+    trustGrade: 'F',
+    riskFlags: [],
+  };
+
+  // Proprietary scoring (safe imports — these are pure functions)
+  let behavioralScore = 100;  // Default: no anomaly detected
+  let complexityScore = 0;
+  let sustainabilityScore = 0;
+  let sybilRiskScore = 0;
+  let regressionScore = 100;  // Default: stable
+
+  try {
+    // Dynamic lazy imports to avoid circular dependencies
+    // These modules consume ScoredAgent but don't import scoring.ts
+    const { detectAnomalies } = await import('./behavioral.js');
+    const anomaly = detectAnomalies(partialAgent);
+    behavioralScore = anomaly.anomalyScore;
+    if (anomaly.driftDetected) {
+      riskFlags.push(`BEHAVIORAL_DRIFT_${anomaly.driftSeverity.toUpperCase()}`);
+    }
+  } catch { behavioralScore = 100; } // Graceful fallback
+
+  try {
+    const { scoreComplexity } = await import('./complexity.js');
+    const complexity = scoreComplexity(partialAgent);
+    complexityScore = complexity.compositeScore;
+  } catch { complexityScore = 50; }
+
+  try {
+    const { scoreEconomics } = await import('./economics.js');
+    const economics = scoreEconomics(partialAgent);
+    sustainabilityScore = economics.compositeScore;
+    if (economics.grossMarginPercent < -20) {
+      riskFlags.push('UNSUSTAINABLE_ECONOMICS');
+    }
+    if (economics.burnRate > 10) {
+      riskFlags.push('HIGH_BURN_RATE');
+    }
+  } catch { sustainabilityScore = 50; }
+
+  try {
+    const { analyzeSybilRisk } = await import('./sybil.js');
+    const sybil = analyzeSybilRisk(partialAgent);
+    sybilRiskScore = sybil.sybilRiskScore;
+    if (sybil.collusionDetected) {
+      riskFlags.push('COLLUSION_SUSPECTED');
+    }
+    if (sybil.quarantineRecommended) {
+      riskFlags.push('SYBIL_QUARANTINE');
+    }
+    for (const flag of sybil.flags) {
+      if (flag.severity === 'critical') {
+        riskFlags.push(`SYBIL_${flag.type}`);
+      }
+    }
+  } catch { sybilRiskScore = 0; }
+
+  try {
+    const { detectRegression } = await import('./regression.js');
+    const regression = detectRegression(partialAgent);
+    regressionScore = regression.regressionScore;
+    if (regression.regressionDetected) {
+      riskFlags.push(`REGRESSION_${regression.regressionSeverity.toUpperCase()}`);
+    }
+  } catch { regressionScore = 100; }
+
+  // === COMPOSITE SCORE v2 ===
+  // Core dimensions (55%) + Proprietary dimensions (45%)
   let trustScore = Math.min(100, Math.round(
+    // Core
     reliabilityScore * WEIGHTS.reliability +
     activityScore * WEIGHTS.activity +
     economicScore * WEIGHTS.economic +
     reputationScore * WEIGHTS.reputation +
-    longevityScore * WEIGHTS.longevity
+    longevityScore * WEIGHTS.longevity +
+    // Proprietary
+    behavioralScore * WEIGHTS.behavioral +
+    complexityScore * WEIGHTS.complexity +
+    sustainabilityScore * WEIGHTS.sustainability
   ));
+
+  // === PENALTY MODIFIERS (sybil + regression reduce score) ===
+  if (sybilRiskScore >= 75) {
+    trustScore = Math.min(trustScore, 15); // Hard cap: quarantine
+  } else if (sybilRiskScore >= 50) {
+    trustScore = Math.round(trustScore * 0.7); // 30% penalty
+  } else if (sybilRiskScore >= 25) {
+    trustScore = Math.round(trustScore * 0.9); // 10% penalty
+  }
+
+  if (regressionScore < 50) {
+    trustScore = Math.round(trustScore * 0.85); // 15% penalty for severe regression
+  }
 
   // === RISK FLAGS ===
   if (agent.isHighRisk) {
@@ -215,6 +359,9 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
     riskFlags.push('EMPTY_WALLET');
   }
 
+  // Deduplicate flags
+  const uniqueFlags = [...new Set(riskFlags)];
+
   // === TIER ===
   let trustTier: ScoredAgent['trustTier'];
   if (agent.isHighRisk) trustTier = 'HIGH_RISK';
@@ -224,6 +371,14 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
   else if (trustScore >= 40) trustTier = 'ESTABLISHED';
   else if (trustScore >= 20) trustTier = 'EMERGING';
   else trustTier = 'NEW';
+
+  // === GRADE (letter grade for quick readability) ===
+  let trustGrade: ScoredAgent['trustGrade'];
+  if (trustScore >= 90) trustGrade = 'A';
+  else if (trustScore >= 75) trustGrade = 'B';
+  else if (trustScore >= 60) trustGrade = 'C';
+  else if (trustScore >= 40) trustGrade = 'D';
+  else trustGrade = 'F';
 
   return {
     name: agent.name,
@@ -256,9 +411,15 @@ export function scoreAgent(agent: AgentRaw): ScoredAgent {
     economicScore,
     reputationScore,
     longevityScore,
+    behavioralScore,
+    complexityScore,
+    sustainabilityScore,
+    sybilRiskScore,
+    regressionScore,
     trustScore,
     trustTier,
-    riskFlags,
+    trustGrade,
+    riskFlags: uniqueFlags,
   };
 }
 

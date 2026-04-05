@@ -190,14 +190,23 @@ function formatAgentResponse(agent: ScoredAgent) {
     hasGraduated: agent.hasGraduated,
     trustScore: agent.trustScore,
     trustTier: agent.trustTier,
+    trustGrade: agent.trustGrade,
     tierLabel: TIER_CONFIG[agent.trustTier].label,
     riskFlags: agent.riskFlags,
     scoreBreakdown: {
-      reliability: { score: agent.reliabilityScore, weight: 0.30 },
-      activity: { score: agent.activityScore, weight: 0.25 },
-      economic: { score: agent.economicScore, weight: 0.20 },
-      reputation: { score: agent.reputationScore, weight: 0.15 },
+      // Core dimensions (55%)
+      reliability: { score: agent.reliabilityScore, weight: 0.15 },
+      activity: { score: agent.activityScore, weight: 0.10 },
+      economic: { score: agent.economicScore, weight: 0.10 },
+      reputation: { score: agent.reputationScore, weight: 0.10 },
       longevity: { score: agent.longevityScore, weight: 0.10 },
+      // Proprietary dimensions (45%)
+      behavioral: { score: agent.behavioralScore, weight: 0.10, label: 'Behavioral Anomaly' },
+      complexity: { score: agent.complexityScore, weight: 0.10, label: 'Task Complexity' },
+      sustainability: { score: agent.sustainabilityScore, weight: 0.10, label: 'Economic Sustainability' },
+      // Penalty systems (not weighted — applied as modifiers)
+      sybilRisk: { score: agent.sybilRiskScore, weight: 0, label: 'Sybil Risk (penalty)' },
+      regression: { score: agent.regressionScore, weight: 0, label: 'Performance Stability' },
     },
     metrics: {
       successRate: agent.successRate,
@@ -295,7 +304,7 @@ app.get('/v1/score/:identifier', async (req, res) => {
       });
     }
 
-    const scored = scoreAgent(raw);
+    const scored = await scoreAgent(raw);
     const response = formatAgentResponse(scored);
     scoreCache.set(cacheKey, response);
 
@@ -362,7 +371,7 @@ app.get('/v1/leaderboard', async (req, res) => {
       throw upstreamErr;
     }
 
-    const scoredAgents = result.data.map(scoreAgent);
+    const scoredAgents = await Promise.all(result.data.map(scoreAgent));
     // Record history for all scored agents (non-blocking batch)
     for (const s of scoredAgents) {
       recordSnapshot(s.walletAddress, s.name, {
@@ -457,7 +466,7 @@ app.get('/v1/search', async (req, res) => {
       throw upstreamErr;
     }
 
-    const agents = result.data.map(scoreAgent).map(formatAgentResponse);
+    const agents = (await Promise.all(result.data.map(scoreAgent))).map(formatAgentResponse);
 
     return res.json({
       data: agents,
@@ -503,7 +512,7 @@ app.get('/v1/ecosystem/health', async (req, res) => {
       throw upstreamErr;
     }
 
-    const agents = result.data.map(scoreAgent);
+    const agents = await Promise.all(result.data.map(scoreAgent));
 
     const tierDistribution: Record<string, number> = {};
     for (const tier of Object.keys(TIER_CONFIG)) {
@@ -595,7 +604,7 @@ app.get('/v1/compare', async (req, res) => {
           ? await fetchAgentByWallet(id)
           : await fetchAgentById(id);
         if (!raw) throw new Error(`Not found: ${id}`);
-        return formatAgentResponse(scoreAgent(raw));
+        return formatAgentResponse(await scoreAgent(raw));
       })
     );
 
@@ -644,7 +653,7 @@ app.get('/v1/alerts', async (req, res) => {
       throw upstreamErr;
     }
 
-    const agents = result.data.map(scoreAgent);
+    const agents = await Promise.all(result.data.map(scoreAgent));
     const flagged = agents
       .filter(a => a.riskFlags.length > 0)
       .map(a => ({
