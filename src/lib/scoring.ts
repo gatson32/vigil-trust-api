@@ -142,6 +142,20 @@ function safeDate(val: string | null | undefined): number | null {
 }
 
 export async function scoreAgent(agent: AgentRaw): Promise<ScoredAgent> {
+  // Guard against agents with null/missing wallet addresses
+  // Use unique hash derived from documentId or name instead of all-zeros
+  if (!agent.walletAddress) {
+    const seed = agent.documentId || agent.name || 'unknown';
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      const char = seed.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    const hashHex = Math.abs(hash).toString(16).padStart(40, '0').slice(-40);
+    agent.walletAddress = `0x${hashHex}`;
+  }
+
   const now = Date.now();
   const createdAt = safeDate(agent.createdAt) ?? now; // fallback to now if unparseable
   const lastActive = safeDate(agent.lastActiveAt) ?? createdAt;
@@ -154,15 +168,28 @@ export async function scoreAgent(agent: AgentRaw): Promise<ScoredAgent> {
   const riskFlags: string[] = [];
 
   // === Safe numeric extraction from raw agent ===
-  const successRate = safeNum(agent.successRate);
+  const rawSuccessRate = safeNum(agent.successRate);
+  // Clamp successRate to 0-100 and flag if it was originally over 100
+  const successRate = Math.min(100, Math.max(0, rawSuccessRate));
+  if (rawSuccessRate > 100) {
+    riskFlags.push('SUSPICIOUS_METRICS');
+  }
   const successfulJobCount = safeNum(agent.successfulJobCount);
   const uniqueBuyerCount = safeNum(agent.uniqueBuyerCount);
   const transactionCount = safeNum(agent.transactionCount);
   const grossAgenticAmount = safeNum(agent.grossAgenticAmount);
 
+  // Validate grossAgenticAmount — reject suspiciously round numbers
+  if (grossAgenticAmount > 0 && /^(\d+)(\.99|\.00)?$/.test(grossAgenticAmount.toString())) {
+    const roundedCheck = Math.abs(grossAgenticAmount - Math.round(grossAgenticAmount));
+    if (roundedCheck < 0.01 && grossAgenticAmount > 1000000) {
+      riskFlags.push('FABRICATED_METRICS');
+    }
+  }
+
   // === RELIABILITY (30%) ===
-  // Success rate is the strongest signal
-  const srScore = Math.min(100, Math.max(0, successRate)); // Clamp to 0-100
+  // Success rate is the strongest signal (already clamped above)
+  const srScore = successRate;
   // Volume matters — 1 job at 100% ≠ 10,000 jobs at 99%
   const volumeScore = logNorm(successfulJobCount, 100, 1_200_000);
   // Penalize zero jobs
@@ -279,6 +306,9 @@ export async function scoreAgent(agent: AgentRaw): Promise<ScoredAgent> {
     const { scoreEconomics } = await import('./economics.js');
     const economics = scoreEconomics(partialAgent);
     sustainabilityScore = economics.compositeScore;
+    if (!economics.revenueVerified && grossAgenticAmount > 0) {
+      riskFlags.push('UNVERIFIED_REVENUE');
+    }
     if (economics.grossMarginPercent < -20) {
       riskFlags.push('UNSUSTAINABLE_ECONOMICS');
     }
@@ -306,7 +336,7 @@ export async function scoreAgent(agent: AgentRaw): Promise<ScoredAgent> {
 
   try {
     const { detectRegression } = await import('./regression.js');
-    const regression = detectRegression(partialAgent);
+    const regression = await detectRegression(partialAgent);
     regressionScore = regression.regressionScore;
     if (regression.regressionDetected) {
       riskFlags.push(`REGRESSION_${regression.regressionSeverity.toUpperCase()}`);

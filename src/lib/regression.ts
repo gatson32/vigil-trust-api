@@ -1,8 +1,10 @@
 // VIGIL Proprietary — Performance Regression & Model Drift Detector
 // Catches performance degradation post-model-update via rolling statistical analysis
+// PostgreSQL-backed with in-memory fallback
 // Patent-pending scoring methodology. All rights reserved.
 
 import type { ScoredAgent } from './scoring.js';
+import { isDbConnected, query } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -23,25 +25,25 @@ export interface RegressionAlert {
   currentValue: number;
   baselineValue: number;
   changePercent: number;
-  window: string;  // e.g., "7d vs 90d"
+  window: string;
 }
 
 export type RegressionAlertType =
-  | 'SUCCESS_RATE_DROP'      // Success rate declining
-  | 'LATENCY_INCREASE'      // Slower execution
-  | 'ERROR_PATTERN_CHANGE'  // Different types of errors appearing
-  | 'VOLUME_COLLAPSE'       // Sudden drop in activity
-  | 'QUALITY_DEGRADATION'   // Lower scores across dimensions
-  | 'RELIABILITY_CLIFF';    // Sudden reliability drop (model update?)
+  | 'SUCCESS_RATE_DROP'
+  | 'LATENCY_INCREASE'
+  | 'ERROR_PATTERN_CHANGE'
+  | 'VOLUME_COLLAPSE'
+  | 'QUALITY_DEGRADATION'
+  | 'RELIABILITY_CLIFF';
 
 export interface TrendAnalysis {
   direction: 'improving' | 'stable' | 'declining' | 'volatile';
-  momentum: number;           // -100 to +100
-  volatility: number;         // 0-100 (how unstable)
-  daysUntilCritical: number | null;  // Projected days until score drops below threshold
+  momentum: number;
+  volatility: number;
+  daysUntilCritical: number | null;
 }
 
-// ─── Performance History Store ──────────────────────────────────────
+// ─── Performance History Store (in-memory fallback) ────────────────
 
 interface PerformanceSnapshot {
   timestamp: number;
@@ -49,7 +51,7 @@ interface PerformanceSnapshot {
   successRate: number;
   activityScore: number;
   reliabilityScore: number;
-  txVolume: number;  // Transactions since last snapshot
+  txVolume: number;
 }
 
 const performanceHistory = new Map<string, PerformanceSnapshot[]>();
@@ -60,32 +62,41 @@ const MAX_HISTORY = 336; // 14 days at 1 snapshot/hour
 /**
  * Record a performance snapshot for regression tracking.
  */
-export function recordPerformance(agent: ScoredAgent): void {
+export async function recordPerformance(agent: ScoredAgent): Promise<void> {
   const key = agent.walletAddress.toLowerCase();
   const now = Date.now();
 
-  let history = performanceHistory.get(key);
-  if (!history) {
-    history = [];
-    performanceHistory.set(key, history);
-  }
-
-  // Deduplicate: skip if last snapshot < 30 min ago
+  // In-memory dedup check
+  const history = performanceHistory.get(key) || [];
   const last = history[history.length - 1];
   if (last && (now - last.timestamp) < 30 * 60 * 1000) return;
 
-  history.push({
+  const snapshot: PerformanceSnapshot = {
     timestamp: now,
     trustScore: agent.trustScore,
     successRate: agent.successRate,
     activityScore: agent.activityScore,
     reliabilityScore: agent.reliabilityScore,
     txVolume: agent.transactionCount,
-  });
+  };
 
-  // Prune old
-  if (history.length > MAX_HISTORY) {
-    performanceHistory.set(key, history.slice(-MAX_HISTORY));
+  // Persist to DB
+  if (isDbConnected()) {
+    await query(
+      `INSERT INTO regression_snapshots (wallet_address, trust_score, success_rate, activity_score, reliability, tx_volume)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [key, snapshot.trustScore, snapshot.successRate, snapshot.activityScore, snapshot.reliabilityScore, snapshot.txVolume],
+    );
+  }
+
+  // In-memory storage
+  if (!performanceHistory.has(key)) {
+    performanceHistory.set(key, []);
+  }
+  performanceHistory.get(key)!.push(snapshot);
+
+  if (performanceHistory.get(key)!.length > MAX_HISTORY) {
+    performanceHistory.set(key, performanceHistory.get(key)!.slice(-MAX_HISTORY));
   }
 }
 
@@ -94,15 +105,45 @@ export function recordPerformance(agent: ScoredAgent): void {
 /**
  * Detect performance regressions by comparing recent behavior to baseline.
  */
-export function detectRegression(agent: ScoredAgent): RegressionResult {
+export async function detectRegression(agent: ScoredAgent): Promise<RegressionResult> {
   const key = agent.walletAddress.toLowerCase();
-  const history = performanceHistory.get(key) || [];
   const alerts: RegressionAlert[] = [];
 
-  // Record current state
-  recordPerformance(agent);
+  await recordPerformance(agent);
 
-  // Need at least some history to detect regression
+  // Get history — prefer DB if connected, fall back to memory
+  let history: PerformanceSnapshot[];
+
+  if (isDbConnected()) {
+    const dbResult = await query<{
+      trust_score: number; success_rate: number;
+      activity_score: number; reliability: number;
+      tx_volume: number; created_at: Date;
+    }>(
+      `SELECT trust_score, success_rate, activity_score, reliability, tx_volume, created_at
+       FROM regression_snapshots
+       WHERE wallet_address = $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [key, MAX_HISTORY],
+    );
+
+    if (dbResult && dbResult.rows.length > 0) {
+      history = dbResult.rows.map(r => ({
+        timestamp: new Date(r.created_at).getTime(),
+        trustScore: r.trust_score,
+        successRate: r.success_rate,
+        activityScore: r.activity_score,
+        reliabilityScore: r.reliability,
+        txVolume: r.tx_volume,
+      }));
+    } else {
+      history = performanceHistory.get(key) || [];
+    }
+  } else {
+    history = performanceHistory.get(key) || [];
+  }
+
   if (history.length < 3) {
     return {
       regressionScore: 100,
@@ -125,8 +166,7 @@ export function detectRegression(agent: ScoredAgent): RegressionResult {
   // === Check 1: Trust Score Regression ===
   const trustDrop = baselineAvg.trustScore - recentAvg.trustScore;
   const trustDropPct = baselineAvg.trustScore > 0
-    ? (trustDrop / baselineAvg.trustScore) * 100
-    : 0;
+    ? (trustDrop / baselineAvg.trustScore) * 100 : 0;
 
   if (trustDropPct > 5) {
     alerts.push({
@@ -143,7 +183,7 @@ export function detectRegression(agent: ScoredAgent): RegressionResult {
 
   // === Check 2: Success Rate Drop ===
   const srDrop = baselineAvg.successRate - recentAvg.successRate;
-  if (srDrop > 3) { // More than 3% absolute drop
+  if (srDrop > 3) {
     alerts.push({
       type: 'SUCCESS_RATE_DROP',
       severity: srDrop > 10 ? 'critical' : 'warning',
@@ -157,7 +197,6 @@ export function detectRegression(agent: ScoredAgent): RegressionResult {
   }
 
   // === Check 3: Reliability Cliff ===
-  // Sudden drop (not gradual) — compare last 2 snapshots to one before
   if (history.length >= 3) {
     const prev = history[history.length - 3];
     const curr = history[history.length - 1];
@@ -178,7 +217,6 @@ export function detectRegression(agent: ScoredAgent): RegressionResult {
   }
 
   // === Check 4: Volume Collapse ===
-  // Recent transaction volume dramatically lower than baseline
   if (baselineAvg.txVolume > 0) {
     const volumeChange = ((recentAvg.txVolume - baselineAvg.txVolume) / baselineAvg.txVolume) * 100;
     if (volumeChange < -40) {
@@ -232,7 +270,6 @@ function analyzeTrend(history: PerformanceSnapshot[]): TrendAnalysis {
   const scores = history.map(h => h.trustScore);
   const n = scores.length;
 
-  // Simple linear regression for trend
   let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
   for (let i = 0; i < n; i++) {
     sumX += i;
@@ -244,29 +281,24 @@ function analyzeTrend(history: PerformanceSnapshot[]): TrendAnalysis {
   const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
   const mean = sumY / n;
 
-  // Momentum: normalized slope (-100 to +100)
   const momentum = Math.max(-100, Math.min(100, Math.round(slope * 10)));
 
-  // Volatility: standard deviation of scores
   const variance = scores.reduce((acc, s) => acc + Math.pow(s - mean, 2), 0) / n;
   const stddev = Math.sqrt(variance);
   const volatility = Math.min(100, Math.round(stddev * 2));
 
-  // Direction
   let direction: TrendAnalysis['direction'];
   if (volatility > 20) direction = 'volatile';
   else if (momentum > 5) direction = 'improving';
   else if (momentum < -5) direction = 'declining';
   else direction = 'stable';
 
-  // Project days until critical (score < 30)
   let daysUntilCritical: number | null = null;
   if (slope < 0 && scores[scores.length - 1] > 30) {
     const pointsUntilCritical = scores[scores.length - 1] - 30;
     const snapshotsUntilCritical = pointsUntilCritical / Math.abs(slope);
-    // Assume ~1 snapshot per hour
     daysUntilCritical = Math.round(snapshotsUntilCritical / 24);
-    if (daysUntilCritical > 365) daysUntilCritical = null; // Too far out to predict
+    if (daysUntilCritical > 365) daysUntilCritical = null;
   }
 
   return { direction, momentum, volatility, daysUntilCritical };
@@ -274,13 +306,7 @@ function analyzeTrend(history: PerformanceSnapshot[]): TrendAnalysis {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function computeAverages(snapshots: PerformanceSnapshot[]): {
-  trustScore: number;
-  successRate: number;
-  activityScore: number;
-  reliabilityScore: number;
-  txVolume: number;
-} {
+function computeAverages(snapshots: PerformanceSnapshot[]) {
   if (snapshots.length === 0) {
     return { trustScore: 0, successRate: 0, activityScore: 0, reliabilityScore: 0, txVolume: 0 };
   }
@@ -311,17 +337,34 @@ function scoreToGrade(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
   return 'F';
 }
 
-export function getRegressionStats(): {
+export async function getRegressionStats(): Promise<{
   trackedAgents: number;
   totalSnapshots: number;
   agentsWithAlerts: number;
-} {
+  storageMode: 'postgresql' | 'memory';
+}> {
+  if (isDbConnected()) {
+    const agents = await query<{ count: string }>(
+      'SELECT COUNT(DISTINCT wallet_address) as count FROM regression_snapshots',
+    );
+    const total = await query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM regression_snapshots',
+    );
+
+    return {
+      trackedAgents: agents ? parseInt(agents.rows[0].count) : 0,
+      totalSnapshots: total ? parseInt(total.rows[0].count) : 0,
+      agentsWithAlerts: 0, // TODO: track in DB
+      storageMode: 'postgresql',
+    };
+  }
+
+  // Fallback
   let total = 0;
   let withAlerts = 0;
 
   for (const history of performanceHistory.values()) {
     total += history.length;
-    // Check if any recent regression
     if (history.length >= 3) {
       const recent = history.slice(-3);
       const baseline = history.slice(0, -3);
@@ -337,5 +380,6 @@ export function getRegressionStats(): {
     trackedAgents: performanceHistory.size,
     totalSnapshots: total,
     agentsWithAlerts: withAlerts,
+    storageMode: 'memory',
   };
 }

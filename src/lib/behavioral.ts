@@ -32,6 +32,7 @@ export interface AnomalyResult {
   driftSeverity: 'none' | 'low' | 'medium' | 'high' | 'critical';
   signals: AnomalySignal[];
   behaviorFingerprint: string;    // Hash of agent's typical behavior profile
+  dataQuality: 'synthesized' | 'on-chain';  // Data source transparency
 }
 
 export interface AnomalySignal {
@@ -115,8 +116,10 @@ function zScore(value: number, mean: number, stddev: number): number {
 
 /**
  * Build a behavior profile from scored agent data + transaction metadata
- * In production, this would consume raw on-chain tx data.
- * For now, we synthesize behavioral signals from available ACP data.
+ * KNOWN LIMITATION: This function synthesizes behavioral signals from aggregated metrics
+ * rather than consuming raw on-chain transaction data. In production, this would parse
+ * detailed transaction-level data (timing, value, counterparties) from on-chain sources.
+ * Synthesized profiles are less precise but provide useful signals for anomaly detection.
  */
 export function buildProfileFromAgent(agent: ScoredAgent): BehaviorProfile {
   const now = Date.now();
@@ -197,6 +200,7 @@ export function detectAnomalies(agent: ScoredAgent): AnomalyResult {
       driftSeverity: 'none',
       signals: [],
       behaviorFingerprint: generateFingerprint(recent),
+      dataQuality: 'synthesized',
     };
   }
 
@@ -340,6 +344,7 @@ export function detectAnomalies(agent: ScoredAgent): AnomalyResult {
     driftSeverity,
     signals,
     behaviorFingerprint: generateFingerprint(recent),
+    dataQuality: 'synthesized',
   };
 }
 

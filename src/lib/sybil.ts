@@ -1,8 +1,10 @@
 // VIGIL Proprietary — Sybil & Collusion Detection Engine
 // Detects coordinated manipulation, circular fund flows, and artificial metric inflation
+// PostgreSQL-backed with in-memory fallback for transaction graph
 // Patent-pending scoring methodology. All rights reserved.
 
 import type { ScoredAgent } from './scoring.js';
+import { isDbConnected, query } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ export interface SybilFlag {
   description: string;
   evidence: string;
   confidence: number;               // 0-1
+  flaggedAt?: number;               // Unix timestamp for time-decay
 }
 
 export type SybilFlagType =
@@ -41,7 +44,7 @@ export interface NetworkMetrics {
   betweennessCentrality: number; // How often agent bridges between others
 }
 
-// ─── Transaction Graph Store ────────────────────────────────────────
+// ─── In-Memory Transaction Graph (fallback) ────────────────────────
 
 interface AgentNode {
   walletAddress: string;
@@ -54,21 +57,61 @@ interface EdgeData {
   totalValue: number;
   firstSeen: number;
   lastSeen: number;
-  avgSpread: number;  // Price spread in agent-to-agent trades
+  avgSpread: number;
 }
 
 const agentGraph = new Map<string, AgentNode>();
+
+// ─── Threshold Fuzzing ──────────────────────────────────────────
+
+/**
+ * Add ±10% randomization to thresholds to prevent attackers from gaming exact cutoffs.
+ */
+function fuzzyThreshold(baseThreshold: number, randomSeed: string): number {
+  // Deterministic hash-based "random" value derived from seed
+  let hash = 0;
+  for (let i = 0; i < randomSeed.length; i++) {
+    const char = randomSeed.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  const variance = ((Math.abs(hash) % 20) - 10) / 100; // ±10%
+  return baseThreshold * (1 + variance);
+}
+
+/**
+ * Apply time-decay to flag confidence: older flags weigh less.
+ * Decay rate: 50% weight after 30 days, negligible after 90 days.
+ */
+function applyTimeDecay(confidence: number, flaggedAt: number | undefined): number {
+  if (!flaggedAt) return confidence; // No timestamp = fresh flag, full weight
+  const ageMs = Date.now() - flaggedAt;
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  // Exponential decay: exp(-ageDays / 30)
+  const decayFactor = Math.exp(-ageDays / 30);
+  return confidence * decayFactor;
+}
 
 // ─── Graph Builder ──────────────────────────────────────────────────
 
 /**
  * Register an agent in the transaction graph.
- * In production, this consumes raw ACP transaction events.
- * For now, we build the graph from scored agent metadata.
  */
-export function registerAgent(agent: ScoredAgent): void {
+export async function registerAgent(agent: ScoredAgent): Promise<void> {
   const key = agent.walletAddress.toLowerCase();
 
+  if (isDbConnected()) {
+    await query(
+      `INSERT INTO agents (wallet_address, agent_name, first_seen, last_updated)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (wallet_address) DO UPDATE SET
+         agent_name = EXCLUDED.agent_name,
+         last_updated = NOW()`,
+      [key, agent.name],
+    );
+  }
+
+  // Always maintain in-memory graph for fast analysis
   if (!agentGraph.has(key)) {
     agentGraph.set(key, {
       walletAddress: agent.walletAddress,
@@ -80,19 +123,33 @@ export function registerAgent(agent: ScoredAgent): void {
 
 /**
  * Record a transaction between two agents.
- * Called when we observe agent-to-agent commerce on ACP.
  */
-export function recordTransaction(
+export async function recordTransaction(
   from: string,
   to: string,
   value: number,
   spread: number = 0,
-): void {
+): Promise<void> {
   const fromKey = from.toLowerCase();
   const toKey = to.toLowerCase();
   const now = Date.now();
 
-  // Ensure nodes exist
+  // Persist to DB if available
+  if (isDbConnected()) {
+    await query(
+      `INSERT INTO sybil_edges (from_wallet, to_wallet, tx_count, total_value, avg_spread, first_seen, last_seen)
+       VALUES ($1, $2, 1, $3, $4, NOW(), NOW())
+       ON CONFLICT (from_wallet, to_wallet) DO UPDATE SET
+         tx_count = sybil_edges.tx_count + 1,
+         total_value = sybil_edges.total_value + EXCLUDED.total_value,
+         avg_spread = (sybil_edges.avg_spread * sybil_edges.tx_count + EXCLUDED.avg_spread)
+                      / (sybil_edges.tx_count + 1),
+         last_seen = NOW()`,
+      [fromKey, toKey, value, spread],
+    );
+  }
+
+  // In-memory graph update
   if (!agentGraph.has(fromKey)) {
     agentGraph.set(fromKey, { walletAddress: from, name: '', edges: new Map() });
   }
@@ -128,27 +185,35 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
   const key = agent.walletAddress.toLowerCase();
   const flags: SybilFlag[] = [];
 
-  registerAgent(agent);
+  // Register in memory graph (sync for speed during scoring)
+  if (!agentGraph.has(key)) {
+    agentGraph.set(key, {
+      walletAddress: agent.walletAddress,
+      name: agent.name,
+      edges: new Map(),
+    });
+  }
+
   const node = agentGraph.get(key);
   const networkMetrics = computeNetworkMetrics(key);
 
   // === Check 1: Buyer Concentration Anomaly ===
-  // If agent has high volume but very few unique buyers = suspicious
   if (agent.transactionCount > 100 && agent.uniqueBuyerCount > 0) {
     const txPerBuyer = agent.transactionCount / agent.uniqueBuyerCount;
-    if (txPerBuyer > 50) {
+    const threshold = fuzzyThreshold(50, agent.walletAddress); // Fuzzy cutoff ±10%
+    if (txPerBuyer > threshold) {
       flags.push({
         type: 'VOLUME_INFLATION',
         severity: txPerBuyer > 200 ? 'critical' : 'high',
         description: `Extremely low buyer diversity: ${txPerBuyer.toFixed(0)} transactions per unique buyer`,
         evidence: `${agent.transactionCount} txs from only ${agent.uniqueBuyerCount} buyers`,
         confidence: Math.min(0.9, txPerBuyer / 200),
+        flaggedAt: Date.now(),
       });
     }
   }
 
   // === Check 2: Metric Farming Pattern ===
-  // High job count but near-zero economic value = farming metrics
   if (agent.successfulJobCount > 500) {
     const valuePerJob = agent.grossAgenticAmount / agent.successfulJobCount;
     if (valuePerJob < 0.01 && agent.successRate > 98) {
@@ -163,7 +228,6 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
   }
 
   // === Check 3: Suspicious Success Rate ===
-  // 100% success rate over large volume is statistically improbable
   if (agent.successRate >= 100 && agent.successfulJobCount > 1000) {
     flags.push({
       type: 'METRIC_FARMING',
@@ -188,7 +252,7 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
   // === Check 5: Wash Trading Signals ===
   if (node) {
     for (const [target, edge] of node.edges) {
-      if (edge.avgSpread < 0.005 && edge.txCount > 10) { // < 0.5% spread
+      if (edge.avgSpread < 0.005 && edge.txCount > 10) {
         const reverseNode = agentGraph.get(target);
         const reverseEdge = reverseNode?.edges.get(key);
         if (reverseEdge && reverseEdge.txCount > 5) {
@@ -199,14 +263,13 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
             evidence: `${edge.txCount} txs to ${target.slice(0, 10)}... at ${(edge.avgSpread * 100).toFixed(2)}% spread, ${reverseEdge.txCount} txs back`,
             confidence: 0.85,
           });
-          break; // One wash trading flag is enough
+          break;
         }
       }
     }
   }
 
   // === Check 6: Wallet Age vs Activity Ratio ===
-  // Brand new wallet with massive activity = suspicious
   if (agent.accountAgeDays < 7 && agent.transactionCount > 500) {
     flags.push({
       type: 'VOLUME_INFLATION',
@@ -224,11 +287,12 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
       flag.severity === 'critical' ? 30 :
         flag.severity === 'high' ? 20 :
           flag.severity === 'medium' ? 10 : 5;
-    sybilRiskScore += severityWeight * flag.confidence;
+    // Apply time-decay to confidence: older flags weigh less
+    const decayedConfidence = applyTimeDecay(flag.confidence, flag.flaggedAt);
+    sybilRiskScore += severityWeight * decayedConfidence;
   }
   sybilRiskScore = Math.min(100, Math.round(sybilRiskScore));
 
-  // Determine cluster membership
   const clusterIds = detectClusterMembership(key);
 
   return {
@@ -239,6 +303,71 @@ export function analyzeSybilRisk(agent: ScoredAgent): SybilResult {
     clusterIds,
     networkMetrics,
   };
+}
+
+/**
+ * Persist a sybil scan result to the database.
+ */
+export async function saveScanResult(
+  agent: ScoredAgent,
+  result: SybilResult,
+): Promise<void> {
+  if (!isDbConnected()) return;
+
+  await query(
+    `INSERT INTO sybil_scan_results (
+      wallet_address, agent_name, sybil_risk_score,
+      collusion_detected, quarantine_rec, flags_json,
+      cluster_ids, network_metrics
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      agent.walletAddress.toLowerCase(),
+      agent.name,
+      result.sybilRiskScore,
+      result.collusionDetected,
+      result.quarantineRecommended,
+      JSON.stringify(result.flags),
+      result.clusterIds,
+      JSON.stringify(result.networkMetrics),
+    ],
+  );
+}
+
+/**
+ * Get all persisted scan results, optionally filtered by risk threshold.
+ */
+export async function getScanResults(minRisk: number = 0, limit: number = 100): Promise<Array<{
+  walletAddress: string; name: string; sybilRiskScore: number;
+  collusionDetected: boolean; quarantineRecommended: boolean;
+  flags: SybilFlag[]; scannedAt: string;
+}> | null> {
+  if (!isDbConnected()) return null;
+
+  const result = await query<{
+    wallet_address: string; agent_name: string; sybil_risk_score: number;
+    collusion_detected: boolean; quarantine_rec: boolean;
+    flags_json: SybilFlag[]; scanned_at: Date;
+  }>(
+    `SELECT wallet_address, agent_name, sybil_risk_score,
+            collusion_detected, quarantine_rec, flags_json, scanned_at
+     FROM sybil_scan_results
+     WHERE sybil_risk_score >= $1
+     ORDER BY sybil_risk_score DESC
+     LIMIT $2`,
+    [minRisk, limit],
+  );
+
+  if (!result) return null;
+
+  return result.rows.map(r => ({
+    walletAddress: r.wallet_address,
+    name: r.agent_name,
+    sybilRiskScore: r.sybil_risk_score,
+    collusionDetected: r.collusion_detected,
+    quarantineRecommended: r.quarantine_rec,
+    flags: r.flags_json,
+    scannedAt: new Date(r.scanned_at).toISOString(),
+  }));
 }
 
 // ─── Network Metrics ────────────────────────────────────────────────
@@ -254,7 +383,6 @@ function computeNetworkMetrics(walletKey: string): NetworkMetrics {
 
   const outDegree = node.edges.size;
 
-  // Count in-degree (how many agents have edges TO this one)
   let inDegree = 0;
   let reciprocalCount = 0;
   for (const [, otherNode] of agentGraph) {
@@ -271,7 +399,6 @@ function computeNetworkMetrics(walletKey: string): NetworkMetrics {
     ? (reciprocalCount * 2) / totalConnections
     : 0;
 
-  // Cluster coefficient: what fraction of this agent's neighbors are connected to each other
   const neighbors = new Set([...node.edges.keys()]);
   let triangles = 0;
   let possibleTriangles = 0;
@@ -286,11 +413,8 @@ function computeNetworkMetrics(walletKey: string): NetworkMetrics {
     }
   }
 
-  const clusterCoefficient = possibleTriangles > 0
-    ? triangles / possibleTriangles
-    : 0;
+  const clusterCoefficient = possibleTriangles > 0 ? triangles / possibleTriangles : 0;
 
-  // Betweenness centrality approximation (simplified)
   const totalNodes = agentGraph.size;
   const betweennessCentrality = totalNodes > 2
     ? Math.min(1, (inDegree * outDegree) / ((totalNodes - 1) * (totalNodes - 2)))
@@ -311,13 +435,11 @@ function detectClusterMembership(walletKey: string): string[] {
   const node = agentGraph.get(walletKey);
   if (!node || node.edges.size === 0) return [];
 
-  // Simple connected-component detection
-  // Group tightly-connected agents into suspected sybil clusters
   const visited = new Set<string>();
   const cluster: string[] = [];
 
   function dfs(key: string, depth: number) {
-    if (depth > 3 || visited.has(key)) return; // Max 3 hops
+    if (depth > 3 || visited.has(key)) return;
     visited.add(key);
     cluster.push(key);
 
@@ -325,7 +447,6 @@ function detectClusterMembership(walletKey: string): string[] {
     if (!n) return;
 
     for (const [neighbor, edge] of n.edges) {
-      // Only follow strong connections (>5 txs and bidirectional)
       if (edge.txCount >= 5) {
         const reverseNode = agentGraph.get(neighbor);
         if (reverseNode?.edges.has(key)) {
@@ -347,11 +468,28 @@ function detectClusterMembership(walletKey: string): string[] {
 
 // ─── Stats ──────────────────────────────────────────────────────────
 
-export function getSybilStats(): {
+export async function getSybilStats(): Promise<{
   trackedAgents: number;
   totalEdges: number;
   suspectedClusters: number;
-} {
+  storageMode: 'postgresql' | 'memory';
+}> {
+  if (isDbConnected()) {
+    const agents = await query<{ count: string }>('SELECT COUNT(*) as count FROM agents');
+    const edges = await query<{ count: string }>('SELECT COUNT(*) as count FROM sybil_edges');
+    const scans = await query<{ count: string }>(
+      'SELECT COUNT(DISTINCT wallet_address) as count FROM sybil_scan_results WHERE sybil_risk_score >= 50',
+    );
+
+    return {
+      trackedAgents: agents ? parseInt(agents.rows[0].count) : 0,
+      totalEdges: edges ? parseInt(edges.rows[0].count) : 0,
+      suspectedClusters: scans ? parseInt(scans.rows[0].count) : 0,
+      storageMode: 'postgresql',
+    };
+  }
+
+  // Fallback: in-memory stats
   let totalEdges = 0;
   const clusters = new Set<string>();
 
@@ -359,7 +497,6 @@ export function getSybilStats(): {
     totalEdges += node.edges.size;
   }
 
-  // Count unique clusters
   for (const [key] of agentGraph) {
     const c = detectClusterMembership(key);
     c.forEach(id => clusters.add(id));
@@ -369,5 +506,6 @@ export function getSybilStats(): {
     trackedAgents: agentGraph.size,
     totalEdges,
     suspectedClusters: clusters.size,
+    storageMode: 'memory',
   };
 }

@@ -18,9 +18,14 @@ import {
   getHistoryStats,
   getRecentMovers,
 } from './lib/history.js';
+import { initDb, closeDb, isDbConnected } from './lib/db.js';
+import { assessAgent, type SentinelVerdict, type SentinelContext } from './lib/sentinel.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
+
+// Enable trust-proxy for proper IP detection behind reverse proxies (Render, etc.)
+app.set('trust proxy', 1);
 
 // ============================================================
 //  CONFIGURATION
@@ -116,7 +121,7 @@ app.use(cors({
     console.log(`[CORS] Request from unlisted origin: ${origin}`);
     return callback(null, true);
   },
-  methods: ['GET'],
+  methods: ['GET', 'POST'],
   maxAge: 86400,
 }));
 
@@ -230,15 +235,19 @@ function formatAgentResponse(agent: ScoredAgent) {
 // ============================================================
 
 // --- Health check ---
-app.get('/v1/health', (_req, res) => {
+app.get('/v1/health', async (_req, res) => {
+  const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.2.0',
+    version: '1.4.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
       healthy: upstreamHealthy,
       failCount: upstreamFailCount,
+    },
+    database: {
+      connected: isDbConnected(),
     },
     cache: {
       leaderboard: leaderboardCache.size,
@@ -250,7 +259,7 @@ app.get('/v1/health', (_req, res) => {
       maxRequests: RATE_LIMIT_MAX,
       activeClients: rateLimitStore.size,
     },
-    history: getHistoryStats(),
+    history: historyStats,
   });
 });
 
@@ -308,8 +317,8 @@ app.get('/v1/score/:identifier', async (req, res) => {
     const response = formatAgentResponse(scored);
     scoreCache.set(cacheKey, response);
 
-    // Record history snapshot (non-blocking)
-    recordSnapshot(scored.walletAddress, scored.name, {
+    // Record history snapshot
+    await recordSnapshot(scored.walletAddress, scored.name, {
       trustScore: scored.trustScore,
       trustTier: scored.trustTier,
       reliabilityScore: scored.reliabilityScore,
@@ -317,6 +326,11 @@ app.get('/v1/score/:identifier', async (req, res) => {
       economicScore: scored.economicScore,
       reputationScore: scored.reputationScore,
       longevityScore: scored.longevityScore,
+      behavioralScore: scored.behavioralScore,
+      complexityScore: scored.complexityScore,
+      sustainabilityScore: scored.sustainabilityScore,
+      sybilRiskScore: scored.sybilRiskScore,
+      regressionScore: scored.regressionScore,
       riskFlags: scored.riskFlags,
     });
 
@@ -372,15 +386,18 @@ app.get('/v1/leaderboard', async (req, res) => {
     }
 
     const scoredAgents = await Promise.all(result.data.map(scoreAgent));
-    // Record history for all scored agents (non-blocking batch)
-    for (const s of scoredAgents) {
+    // Record history for all scored agents
+    await Promise.all(scoredAgents.map(s =>
       recordSnapshot(s.walletAddress, s.name, {
         trustScore: s.trustScore, trustTier: s.trustTier,
         reliabilityScore: s.reliabilityScore, activityScore: s.activityScore,
         economicScore: s.economicScore, reputationScore: s.reputationScore,
-        longevityScore: s.longevityScore, riskFlags: s.riskFlags,
-      });
-    }
+        longevityScore: s.longevityScore,
+        behavioralScore: s.behavioralScore, complexityScore: s.complexityScore,
+        sustainabilityScore: s.sustainabilityScore, sybilRiskScore: s.sybilRiskScore,
+        regressionScore: s.regressionScore, riskFlags: s.riskFlags,
+      })
+    ));
     let agents = scoredAgents.map(formatAgentResponse);
 
     if (tier && tier in TIER_CONFIG) {
@@ -628,6 +645,195 @@ app.get('/v1/compare', async (req, res) => {
   }
 });
 
+// --- GET /v1/sentinel/:identifier ---
+app.get('/v1/sentinel/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+
+    // Validate identifier
+    if (!isValidIdentifier(identifier)) {
+      return res.status(400).json({
+        error: 'Invalid identifier',
+        message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+      });
+    }
+
+    const cacheKey = `sentinel:${identifier.toLowerCase()}`;
+
+    // Check cache
+    const cached = scoreCache.get(cacheKey);
+    if (cached) {
+      return res.json({ data: cached, cached: true });
+    }
+
+    // Circuit breaker check
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable. Try again in 30 seconds.',
+      });
+    }
+
+    // Fetch agent
+    let raw;
+    try {
+      if (identifier.startsWith('0x') && identifier.length === 42) {
+        raw = await fetchAgentByWallet(identifier);
+      } else {
+        raw = await fetchAgentById(identifier);
+      }
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
+    if (!raw) {
+      return res.status(404).json({
+        error: 'Agent not found',
+        message: `No agent found for identifier: ${identifier}`,
+      });
+    }
+
+    // Score and assess agent
+    const scored = await scoreAgent(raw);
+
+    // Create sentinel context with the scored agent
+    const context: SentinelContext = {
+      allAgents: [scored],
+      scanTimestamp: Date.now(),
+    };
+
+    // Run full sentinel assessment
+    const verdict = assessAgent(scored, context);
+
+    // Cache the verdict
+    scoreCache.set(cacheKey, verdict);
+
+    return res.json({ data: verdict, cached: false });
+  } catch (err) {
+    console.error('Sentinel assessment error:', err);
+    return res.status(502).json({
+      error: 'Upstream error',
+      message: 'Failed to perform sentinel assessment on agent',
+    });
+  }
+});
+
+// --- POST /v1/acp/trust-score (ACP-compatible trust score endpoint) ---
+app.post('/v1/acp/trust-score', async (req, res) => {
+  try {
+    const { walletAddress, agentId } = req.body;
+
+    // Validate input
+    if (!walletAddress && !agentId) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: 'Body must include walletAddress or agentId',
+      });
+    }
+
+    const identifier = walletAddress || agentId;
+
+    // Validate identifier
+    if (!isValidIdentifier(identifier)) {
+      return res.status(400).json({
+        error: 'Invalid identifier',
+        message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+      });
+    }
+
+    const cacheKey = `acp-trust:${identifier.toLowerCase()}`;
+
+    // Check cache
+    const cached = scoreCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Circuit breaker check
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({
+        service: 'VIGIL Trust Score',
+        version: '1.4.0',
+        error: 'Service temporarily unavailable',
+        message: 'Upstream data source is temporarily unreachable.',
+      });
+    }
+
+    // Fetch agent
+    let raw;
+    try {
+      if (identifier.startsWith('0x') && identifier.length === 42) {
+        raw = await fetchAgentByWallet(identifier);
+      } else {
+        raw = await fetchAgentById(identifier);
+      }
+      recordUpstreamSuccess();
+    } catch (upstreamErr) {
+      recordUpstreamFailure();
+      throw upstreamErr;
+    }
+
+    if (!raw) {
+      return res.status(404).json({
+        service: 'VIGIL Trust Score',
+        version: '1.4.0',
+        error: 'Agent not found',
+        message: `No agent found for identifier: ${identifier}`,
+      });
+    }
+
+    // Score and assess agent
+    const scored = await scoreAgent(raw);
+
+    // Create sentinel context
+    const context: SentinelContext = {
+      allAgents: [scored],
+      scanTimestamp: Date.now(),
+    };
+
+    // Run sentinel assessment
+    const verdict = assessAgent(scored, context);
+
+    // Build ACP-compatible response
+    const acpResponse = {
+      service: 'VIGIL Trust Score',
+      version: '1.4.0',
+      result: {
+        trustScore: scored.trustScore,
+        trustTier: scored.trustTier,
+        trustGrade: scored.trustGrade,
+        riskFlags: scored.riskFlags,
+        sybilRiskScore: scored.sybilRiskScore,
+        threatLevel: verdict.threatLevel,
+        sentinel: {
+          alertCount: verdict.allAlerts.length,
+          criticalCount: verdict.allAlerts.filter(a => a.severity === 'critical' || a.severity === 'emergency').length,
+          verdict: verdict.threatLevel === 'SAFE' ? 'CLEAR' : 'FLAGGED',
+        },
+      },
+      pricing: {
+        cost: '1.00 USDC',
+        protocol: 'Virtuals ACP',
+      },
+    };
+
+    // Cache the response
+    scoreCache.set(cacheKey, acpResponse);
+
+    return res.json(acpResponse);
+  } catch (err) {
+    console.error('ACP trust score error:', err);
+    return res.status(502).json({
+      service: 'VIGIL Trust Score',
+      version: '1.4.0',
+      error: 'Upstream error',
+      message: 'Failed to fetch trust score',
+    });
+  }
+});
+
 // --- GET /v1/alerts ---
 app.get('/v1/alerts', async (req, res) => {
   try {
@@ -687,7 +893,7 @@ app.get('/v1/alerts', async (req, res) => {
 });
 
 // --- GET /v1/history/:walletAddress ---
-app.get('/v1/history/:walletAddress', (req, res) => {
+app.get('/v1/history/:walletAddress', async (req, res) => {
   const wallet = req.params.walletAddress;
   if (!isValidIdentifier(wallet) || !wallet.startsWith('0x')) {
     return res.status(400).json({
@@ -696,7 +902,7 @@ app.get('/v1/history/:walletAddress', (req, res) => {
     });
   }
 
-  const history = getHistory(wallet);
+  const history = await getHistory(wallet);
   if (!history) {
     return res.status(404).json({
       error: 'No history found',
@@ -705,7 +911,7 @@ app.get('/v1/history/:walletAddress', (req, res) => {
   }
 
   const hoursBack = clampInt(req.query.hours as string, 1, 168, 24);
-  const deltas = getScoreDeltas(wallet, hoursBack);
+  const deltas = await getScoreDeltas(wallet, hoursBack);
 
   return res.json({
     data: {
@@ -724,10 +930,11 @@ app.get('/v1/history/:walletAddress', (req, res) => {
 });
 
 // --- GET /v1/movers ---
-app.get('/v1/movers', (req, res) => {
+app.get('/v1/movers', async (req, res) => {
   const hoursBack = clampInt(req.query.hours as string, 1, 168, 24);
   const limit = clampInt(req.query.limit as string, 1, 50, 10);
-  const movers = getRecentMovers(hoursBack, limit);
+  const movers = await getRecentMovers(hoursBack, limit);
+  const histStats = await getHistoryStats();
 
   return res.json({
     data: movers.map(m => ({
@@ -737,7 +944,7 @@ app.get('/v1/movers', (req, res) => {
     meta: {
       hoursBack,
       timestamp: new Date().toISOString(),
-      ...getHistoryStats(),
+      ...histStats,
     },
   });
 });
@@ -746,7 +953,7 @@ app.get('/v1/movers', (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.2.0',
+    version: '1.4.0',
     description: 'On-chain credit bureau for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -755,6 +962,8 @@ app.get('/v1', (_req, res) => {
       'GET /v1/search?q=': 'Search agents by name or symbol',
       'GET /v1/ecosystem/health': 'Aggregated ecosystem statistics',
       'GET /v1/compare?ids=id1,id2': 'Compare 2-5 agents side by side',
+      'GET /v1/sentinel/:identifier': 'Full 12-sentinel security scan (returns SentinelVerdict)',
+      'POST /v1/acp/trust-score': 'ACP-compatible trust score endpoint (body: {walletAddress|agentId})',
       'GET /v1/alerts': 'Agents with active risk flags',
       'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
       'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
@@ -801,18 +1010,42 @@ app.use((_req, res) => {
 });
 
 // --- Start server ---
-app.listen(PORT, () => {
-  console.log(`
+async function start() {
+  // Initialize database (graceful fallback to memory if unavailable)
+  const dbConnected = await initDb();
+
+  app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════════════╗
-║         VIGIL Trust Score API v1.1.0             ║
+║         VIGIL Trust Score API v1.3.0             ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
 ║  Docs:      http://localhost:${PORT}/v1            ║
 ║  Health:    http://localhost:${PORT}/v1/health     ║
+║  Storage:   ${dbConnected ? 'PostgreSQL (persistent)' : 'In-Memory (volatile)'}       ║
 ║  Rate Limit: ${RATE_LIMIT_MAX} req/min per IP             ║
 ╚══════════════════════════════════════════════════╝
-  `);
+    `);
+  });
+}
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('[SHUTDOWN] Received SIGTERM, closing database...');
+  await closeDb();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('[SHUTDOWN] Received SIGINT, closing database...');
+  await closeDb();
+  process.exit(0);
+});
+
+start().catch(err => {
+  console.error('[FATAL] Failed to start server:', err);
+  process.exit(1);
 });
 
 export default app;

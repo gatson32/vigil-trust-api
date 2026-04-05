@@ -12,6 +12,7 @@ export interface EconomicProfile {
   estimatedCosts: number;          // Gas + protocol fees
   estimatedMargin: number;         // Revenue - Costs
   grossMarginPercent: number;      // (Revenue - Costs) / Revenue
+  revenueVerified: boolean;         // Whether revenue is on-chain verified
 
   // Customer economics
   customerAcquisitionCost: number; // Estimated CAC
@@ -42,6 +43,7 @@ const VIRTUALS_GRADUATION_COST = 100;  // Estimated graduation cost in USD
 
 export function scoreEconomics(agent: ScoredAgent): EconomicProfile {
   // === Revenue Estimation ===
+  const revenueVerified = agent.revenue > 0;  // Verified if directly reported
   const estimatedRevenue = agent.revenue > 0 ? agent.revenue :
     agent.grossAgenticAmount * 0.05; // Assume 5% of aGDP is agent revenue if not reported
 
@@ -134,6 +136,7 @@ export function scoreEconomics(agent: ScoredAgent): EconomicProfile {
     estimatedCosts: round2(estimatedCosts),
     estimatedMargin: round2(estimatedMargin),
     grossMarginPercent: round2(grossMarginPercent),
+    revenueVerified,
     customerAcquisitionCost: round2(customerAcquisitionCost),
     customerLifetimeValue: round2(customerLifetimeValue),
     clvToCacRatio: round2(clvToCacRatio),
