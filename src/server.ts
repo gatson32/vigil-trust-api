@@ -1085,9 +1085,10 @@ app.post('/v1/watchlist/check', async (req, res) => {
     const flagOnRiskFlags = thresholds?.flagOnRiskFlags ?? true;
     const startTime = Date.now();
 
-    // Score all agents in parallel
-    const results = await Promise.allSettled(
-      addresses.map(async (addr: string) => {
+    // Score agents sequentially to avoid upstream rate limits
+    const results: PromiseSettledResult<{ scored: ScoredAgent; sentinel: SentinelVerdict }>[] = [];
+    for (const addr of addresses) {
+      try {
         if (!isUpstreamAvailable()) throw new Error('Upstream unavailable');
         const raw = await fetchAgentByWallet(addr);
         if (!raw) throw new Error(`Agent not found: ${addr}`);
@@ -1098,9 +1099,12 @@ app.post('/v1/watchlist/check', async (req, res) => {
           scanTimestamp: Date.now(),
         };
         const sentinel = assessAgent(scored, context);
-        return { scored, sentinel };
-      })
-    );
+        results.push({ status: 'fulfilled', value: { scored, sentinel } });
+      } catch (err) {
+        recordUpstreamFailure();
+        results.push({ status: 'rejected', reason: err as Error });
+      }
+    }
 
     const agents = results.map((r, i) => {
       if (r.status === 'rejected') {
