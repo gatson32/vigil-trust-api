@@ -1094,11 +1094,16 @@ app.post('/v1/watchlist/check', async (req, res) => {
         if (!raw) throw new Error(`Agent not found: ${addr}`);
         recordUpstreamSuccess();
         const scored = await scoreAgent(raw);
-        const context: SentinelContext = {
-          allAgents: [scored],
-          scanTimestamp: Date.now(),
-        };
-        const sentinel = assessAgent(scored, context);
+        let sentinel: SentinelVerdict | null = null;
+        try {
+          const context: SentinelContext = {
+            allAgents: [scored],
+            scanTimestamp: Date.now(),
+          };
+          sentinel = assessAgent(scored, context);
+        } catch (_sentinelErr) {
+          // Sentinel scan is best-effort; continue without it
+        }
         results.push({ status: 'fulfilled', value: { scored, sentinel } });
       } catch (err) {
         recordUpstreamFailure();
@@ -1124,7 +1129,7 @@ app.post('/v1/watchlist/check', async (req, res) => {
       if (flagOnRiskFlags && scored.riskFlags.length > 0) {
         alerts.push(`RISK_FLAGS: ${scored.riskFlags.join(', ')}`);
       }
-      if (sentinel.threatLevel === 'CRITICAL' || sentinel.threatLevel === 'EMERGENCY') {
+      if (sentinel && (sentinel.threatLevel === 'CRITICAL' || sentinel.threatLevel === 'EMERGENCY')) {
         alerts.push(`SENTINEL_THREAT: ${sentinel.threatLevel}`);
       }
 
@@ -1135,7 +1140,7 @@ app.post('/v1/watchlist/check', async (req, res) => {
         trustScore: scored.trustScore,
         trustTier: scored.trustTier,
         riskFlags: scored.riskFlags,
-        sentinelThreat: sentinel.threatLevel,
+        sentinelThreat: sentinel?.threatLevel ?? 'UNKNOWN',
         alerts,
       };
     });
