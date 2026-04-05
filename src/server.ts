@@ -1093,7 +1093,7 @@ app.post('/v1/watchlist/check', async (req, res) => {
         const raw = await fetchAgentByWallet(addr);
         if (!raw) throw new Error(`Agent not found: ${addr}`);
         recordUpstreamSuccess();
-        const scored = scoreAgent(raw);
+        const scored = await scoreAgent(raw);
         const context: SentinelContext = {
           allAgents: [scored],
           scanTimestamp: Date.now(),
