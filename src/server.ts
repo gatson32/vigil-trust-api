@@ -239,7 +239,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.6.0',
+    version: '1.7.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -1086,7 +1086,7 @@ app.post('/v1/watchlist/check', async (req, res) => {
     const startTime = Date.now();
 
     // Score agents sequentially to avoid upstream rate limits
-    const results: PromiseSettledResult<{ scored: ScoredAgent; sentinel: SentinelVerdict }>[] = [];
+    const results: PromiseSettledResult<{ scored: ScoredAgent; sentinel: SentinelVerdict | null }>[] = [];
     for (const addr of addresses) {
       try {
         if (!isUpstreamAvailable()) throw new Error('Upstream unavailable');
@@ -1171,11 +1171,226 @@ app.post('/v1/watchlist/check', async (req, res) => {
   }
 });
 
+// --- Quick Trust Check ---
+// One-call trust gate for any agent — returns approve/deny in <500ms
+// Designed for inline use: if (await vigil.check(addr)).safe) { proceed }
+app.get('/v1/trust/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const threshold = clampInt(req.query.threshold as string, 0, 100, 50);
+
+    if (!isValidIdentifier(identifier)) {
+      return res.status(400).json({ error: 'Invalid identifier' });
+    }
+
+    // Check cache first
+    const cacheKey = `trust:${identifier}`;
+    const cached = scoreCache.get(cacheKey);
+    if (cached) {
+      const c = cached as any;
+      return res.json({
+        data: {
+          safe: c.trustScore >= threshold,
+          score: c.trustScore,
+          tier: c.trustTier,
+          grade: c.trustGrade,
+          flags: c.riskFlags,
+          name: c.name,
+          threshold,
+        },
+        cached: true,
+      });
+    }
+
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+    }
+
+    const raw = identifier.startsWith('0x') && identifier.length === 42
+      ? await fetchAgentByWallet(identifier)
+      : await fetchAgentById(identifier);
+
+    if (!raw) {
+      return res.status(404).json({
+        data: { safe: false, score: -1, tier: 'UNKNOWN', grade: 'F', flags: ['NOT_FOUND'], name: null, threshold },
+      });
+    }
+
+    recordUpstreamSuccess();
+    const scored = await scoreAgent(raw);
+    scoreCache.set(cacheKey, scored);
+
+    return res.json({
+      data: {
+        safe: scored.trustScore >= threshold,
+        score: scored.trustScore,
+        tier: scored.trustTier,
+        grade: scored.trustGrade,
+        flags: scored.riskFlags,
+        name: scored.name,
+        threshold,
+      },
+      cached: false,
+    });
+  } catch (err) {
+    recordUpstreamFailure();
+    console.error('Trust check error:', err);
+    return res.status(502).json({ error: 'Trust check failed', message: (err as Error).message });
+  }
+});
+
+// --- Top Agents by Category ---
+// Returns the most trusted agents, optionally filtered — useful for discovery
+app.get('/v1/top', async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit as string, 1, 50, 10);
+    const minScore = clampInt(req.query.minScore as string, 0, 100, 50);
+    const role = (req.query.role as string || '').toUpperCase();
+
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+    }
+
+    const response = await fetchAgentsPage(1, 100);
+    if (!response || !response.data || response.data.length === 0) {
+      return res.json({ data: { agents: [], total: 0, filters: { minScore, role: role || 'ALL', limit } }, cached: false });
+    }
+    recordUpstreamSuccess();
+
+    const allScored = await Promise.all(response.data.map((r: any) => scoreAgent(r)));
+    let filtered = allScored
+      .filter((a: ScoredAgent) => a.trustScore >= minScore)
+      .sort((a: ScoredAgent, b: ScoredAgent) => b.trustScore - a.trustScore);
+
+    if (role && ['PROVIDER', 'BUYER', 'HYBRID'].includes(role)) {
+      filtered = filtered.filter((a: ScoredAgent) => a.role === role);
+    }
+
+    const top = filtered.slice(0, limit).map((a: ScoredAgent) => ({
+      name: a.name,
+      walletAddress: a.walletAddress,
+      documentId: a.documentId,
+      trustScore: a.trustScore,
+      trustTier: a.trustTier,
+      trustGrade: a.trustGrade,
+      role: a.role,
+      successRate: a.successRate,
+      revenue: a.revenue,
+      jobCount: a.jobCount,
+      riskFlags: a.riskFlags,
+    }));
+
+    return res.json({
+      data: {
+        agents: top,
+        total: filtered.length,
+        filters: { minScore, role: role || 'ALL', limit },
+      },
+      cached: false,
+    });
+  } catch (err) {
+    recordUpstreamFailure();
+    console.error('Top agents error:', err);
+    return res.status(502).json({ error: 'Failed to fetch top agents', message: (err as Error).message });
+  }
+});
+
+// --- Risk Scan (deep) ---
+// Full risk analysis combining trust score + sentinel + behavioral flags
+app.get('/v1/risk/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+
+    if (!isValidIdentifier(identifier)) {
+      return res.status(400).json({ error: 'Invalid identifier' });
+    }
+
+    if (!isUpstreamAvailable()) {
+      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+    }
+
+    const raw = identifier.startsWith('0x') && identifier.length === 42
+      ? await fetchAgentByWallet(identifier)
+      : await fetchAgentById(identifier);
+
+    if (!raw) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    recordUpstreamSuccess();
+    const scored = await scoreAgent(raw);
+
+    let sentinel: SentinelVerdict | null = null;
+    try {
+      const context: SentinelContext = { allAgents: [scored], scanTimestamp: Date.now() };
+      sentinel = assessAgent(scored, context);
+    } catch (_) { /* sentinel best-effort */ }
+
+    // Build risk profile
+    const riskFactors: string[] = [];
+    if (scored.trustScore < 25) riskFactors.push('CRITICALLY_LOW_TRUST_SCORE');
+    if (scored.trustScore < 50) riskFactors.push('BELOW_AVERAGE_TRUST');
+    if (scored.successRate < 50) riskFactors.push('LOW_SUCCESS_RATE');
+    if (scored.walletBalance <= 0) riskFactors.push('EMPTY_WALLET');
+    if (scored.daysSinceActive > 30) riskFactors.push('DORMANT');
+    if (scored.uniqueBuyerCount <= 1) riskFactors.push('CONCENTRATED_CLIENT_BASE');
+    if (scored.sybilRiskScore > 50) riskFactors.push('SYBIL_RISK_ELEVATED');
+    if (scored.regressionScore < 50) riskFactors.push('PERFORMANCE_DECLINING');
+
+    const riskLevel = riskFactors.length === 0 ? 'LOW'
+      : riskFactors.length <= 2 ? 'MODERATE'
+      : riskFactors.length <= 4 ? 'HIGH'
+      : 'CRITICAL';
+
+    return res.json({
+      data: {
+        agent: {
+          name: scored.name,
+          walletAddress: scored.walletAddress,
+          documentId: scored.documentId,
+        },
+        riskLevel,
+        trustScore: scored.trustScore,
+        trustTier: scored.trustTier,
+        trustGrade: scored.trustGrade,
+        riskFactors,
+        riskFlags: scored.riskFlags,
+        sentinel: sentinel ? {
+          threatLevel: sentinel.threatLevel,
+          alerts: sentinel.allAlerts?.length || 0,
+          escalation: sentinel.crossSentinelEscalation,
+        } : null,
+        recommendation: riskLevel === 'LOW' ? 'SAFE_TO_TRANSACT'
+          : riskLevel === 'MODERATE' ? 'PROCEED_WITH_CAUTION'
+          : riskLevel === 'HIGH' ? 'ADDITIONAL_VERIFICATION_RECOMMENDED'
+          : 'DO_NOT_TRANSACT',
+        scoreBreakdown: {
+          reliability: scored.reliabilityScore,
+          activity: scored.activityScore,
+          economic: scored.economicScore,
+          reputation: scored.reputationScore,
+          longevity: scored.longevityScore,
+          behavioral: scored.behavioralScore,
+          complexity: scored.complexityScore,
+          sustainability: scored.sustainabilityScore,
+          sybilRisk: scored.sybilRiskScore,
+          regression: scored.regressionScore,
+        },
+      },
+      cached: false,
+    });
+  } catch (err) {
+    recordUpstreamFailure();
+    console.error('Risk scan error:', err);
+    return res.status(502).json({ error: 'Risk scan failed', message: (err as Error).message });
+  }
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.6.0',
+    version: '1.7.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1192,6 +1407,9 @@ app.get('/v1', (_req, res) => {
       'POST /v1/evaluate': 'ACP evaluator — score seller trustworthiness before approving a job (body: {sellerAddress, jobId?, buyerAddress?, deliverable?})',
       'POST /v1/evaluate/batch': 'Batch evaluate up to 20 agents at once (body: {addresses: string[]})',
       'POST /v1/watchlist/check': 'Monitor a portfolio of agents for risk changes (body: {addresses: string[], thresholds?: {minScore?, flagOnRiskFlags?}})',
+      'GET /v1/trust/:identifier': 'Quick trust gate — returns safe/unsafe + score in <500ms (query: threshold=50)',
+      'GET /v1/top': 'Most trusted agents in the ecosystem (query: limit, minScore, role)',
+      'GET /v1/risk/:identifier': 'Deep risk analysis — trust + sentinel + behavioral factors + recommendation',
     },
     scoring: {
       dimensions: {
