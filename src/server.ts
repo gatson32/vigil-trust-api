@@ -20,6 +20,7 @@ import {
 } from './lib/history.js';
 import { initDb, closeDb, isDbConnected } from './lib/db.js';
 import { assessAgent, type SentinelVerdict, type SentinelContext } from './lib/sentinel.js';
+import { startEvaluatorListener } from './lib/evaluator.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -239,7 +240,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.7.0',
+    version: '1.4.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -949,449 +950,12 @@ app.get('/v1/movers', async (req, res) => {
   });
 });
 
-// --- POST /v1/evaluate ---
-// ACP-compatible evaluator endpoint — score a seller agent before approving a job
-app.post('/v1/evaluate', async (req, res) => {
-  try {
-    const { jobId, buyerAddress, sellerAddress, deliverable, serviceRequirement, memos } = req.body;
-
-    if (!sellerAddress) {
-      return res.status(400).json({
-        error: 'Missing required field',
-        message: 'sellerAddress is required for evaluation',
-      });
-    }
-
-    // Dynamic import to avoid loading evaluator module at startup
-    const { evaluateJob } = await import('./lib/evaluator.js');
-
-    const result = await evaluateJob({
-      jobId: jobId || 'manual',
-      buyerAddress: buyerAddress || 'unknown',
-      sellerAddress,
-      deliverable: deliverable || { type: 'unknown', value: null },
-      serviceRequirement: serviceRequirement || null,
-      memos: memos || [],
-    });
-
-    return res.json({
-      data: result,
-      cached: false,
-    });
-  } catch (err) {
-    console.error('Evaluation error:', err);
-    return res.status(502).json({
-      error: 'Evaluation failed',
-      message: 'Failed to evaluate agent. ' + (err as Error).message,
-    });
-  }
-});
-
-// --- Batch Evaluation ---
-// Score multiple agents in one call — perfect for portfolio risk checks
-app.post('/v1/evaluate/batch', async (req, res) => {
-  try {
-    const { addresses } = req.body;
-
-    if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
-      return res.status(400).json({
-        error: 'Missing required field',
-        message: 'addresses must be a non-empty array of wallet addresses',
-      });
-    }
-
-    if (addresses.length > 20) {
-      return res.status(400).json({
-        error: 'Too many addresses',
-        message: 'Maximum 20 addresses per batch request',
-      });
-    }
-
-    const { evaluateJob } = await import('./lib/evaluator.js');
-    const startTime = Date.now();
-
-    const results = await Promise.allSettled(
-      addresses.map((addr: string) =>
-        evaluateJob({
-          jobId: 'batch',
-          buyerAddress: 'batch-caller',
-          sellerAddress: addr,
-          deliverable: { type: 'batch', value: null },
-          serviceRequirement: null,
-          memos: [],
-        })
-      )
-    );
-
-    const evaluations = results.map((r, i) => ({
-      address: addresses[i],
-      ...(r.status === 'fulfilled'
-        ? { success: true, ...r.value }
-        : { success: false, error: (r.reason as Error).message }),
-    }));
-
-    // Summary stats
-    const successful = evaluations.filter((e: any) => e.success);
-    const approved = successful.filter((e: any) => e.approved);
-    const rejected = successful.filter((e: any) => !e.approved);
-    const avgScore = successful.length > 0
-      ? Math.round(successful.reduce((sum: number, e: any) => sum + (e.sellerTrustScore || 0), 0) / successful.length)
-      : 0;
-
-    return res.json({
-      data: {
-        evaluations,
-        summary: {
-          total: addresses.length,
-          approved: approved.length,
-          rejected: rejected.length,
-          failed: results.filter(r => r.status === 'rejected').length,
-          avgTrustScore: avgScore,
-          batchDurationMs: Date.now() - startTime,
-        },
-      },
-      cached: false,
-    });
-  } catch (err) {
-    console.error('Batch evaluation error:', err);
-    return res.status(502).json({
-      error: 'Batch evaluation failed',
-      message: (err as Error).message,
-    });
-  }
-});
-
-// --- Watchlist / Portfolio Monitor ---
-// Check a set of agents and flag any changes or risks since last check
-app.post('/v1/watchlist/check', async (req, res) => {
-  try {
-    const { addresses, thresholds } = req.body;
-
-    if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
-      return res.status(400).json({
-        error: 'Missing required field',
-        message: 'addresses must be a non-empty array of wallet addresses',
-      });
-    }
-
-    if (addresses.length > 50) {
-      return res.status(400).json({
-        error: 'Too many addresses',
-        message: 'Maximum 50 addresses per watchlist check',
-      });
-    }
-
-    const minScore = thresholds?.minScore ?? 25;
-    const flagOnRiskFlags = thresholds?.flagOnRiskFlags ?? true;
-    const startTime = Date.now();
-
-    // Score agents sequentially to avoid upstream rate limits
-    const results: PromiseSettledResult<{ scored: ScoredAgent; sentinel: SentinelVerdict | null }>[] = [];
-    for (const addr of addresses) {
-      try {
-        if (!isUpstreamAvailable()) throw new Error('Upstream unavailable');
-        const raw = await fetchAgentByWallet(addr);
-        if (!raw) throw new Error(`Agent not found: ${addr}`);
-        recordUpstreamSuccess();
-        const scored = await scoreAgent(raw);
-        let sentinel: SentinelVerdict | null = null;
-        try {
-          const context: SentinelContext = {
-            allAgents: [scored],
-            scanTimestamp: Date.now(),
-          };
-          sentinel = assessAgent(scored, context);
-        } catch (_sentinelErr) {
-          // Sentinel scan is best-effort; continue without it
-        }
-        results.push({ status: 'fulfilled', value: { scored, sentinel } });
-      } catch (err) {
-        recordUpstreamFailure();
-        results.push({ status: 'rejected', reason: err as Error });
-      }
-    }
-
-    const agents = results.map((r, i) => {
-      if (r.status === 'rejected') {
-        return {
-          address: addresses[i],
-          status: 'error' as const,
-          error: (r.reason as Error).message,
-        };
-      }
-
-      const { scored, sentinel } = r.value;
-      const alerts: string[] = [];
-
-      if (scored.trustScore < minScore) {
-        alerts.push(`SCORE_BELOW_THRESHOLD: ${scored.trustScore} < ${minScore}`);
-      }
-      if (flagOnRiskFlags && scored.riskFlags.length > 0) {
-        alerts.push(`RISK_FLAGS: ${scored.riskFlags.join(', ')}`);
-      }
-      if (sentinel && (sentinel.threatLevel === 'CRITICAL' || sentinel.threatLevel === 'EMERGENCY')) {
-        alerts.push(`SENTINEL_THREAT: ${sentinel.threatLevel}`);
-      }
-
-      return {
-        address: addresses[i],
-        name: scored.name,
-        status: alerts.length > 0 ? 'alert' as const : 'ok' as const,
-        trustScore: scored.trustScore,
-        trustTier: scored.trustTier,
-        riskFlags: scored.riskFlags,
-        sentinelThreat: sentinel?.threatLevel ?? 'UNKNOWN',
-        alerts,
-      };
-    });
-
-    const alertCount = agents.filter(a => a.status === 'alert').length;
-    const errorCount = agents.filter(a => a.status === 'error').length;
-
-    return res.json({
-      data: {
-        agents,
-        summary: {
-          total: addresses.length,
-          ok: agents.filter(a => a.status === 'ok').length,
-          alerts: alertCount,
-          errors: errorCount,
-          checkDurationMs: Date.now() - startTime,
-        },
-        thresholds: { minScore, flagOnRiskFlags },
-      },
-      cached: false,
-    });
-  } catch (err) {
-    console.error('Watchlist check error:', err);
-    return res.status(502).json({
-      error: 'Watchlist check failed',
-      message: (err as Error).message,
-    });
-  }
-});
-
-// --- Quick Trust Check ---
-// One-call trust gate for any agent — returns approve/deny in <500ms
-// Designed for inline use: if (await vigil.check(addr)).safe) { proceed }
-app.get('/v1/trust/:identifier', async (req, res) => {
-  try {
-    const { identifier } = req.params;
-    const threshold = clampInt(req.query.threshold as string, 0, 100, 50);
-
-    if (!isValidIdentifier(identifier)) {
-      return res.status(400).json({ error: 'Invalid identifier' });
-    }
-
-    // Check cache first
-    const cacheKey = `trust:${identifier}`;
-    const cached = scoreCache.get(cacheKey);
-    if (cached) {
-      const c = cached as any;
-      return res.json({
-        data: {
-          safe: c.trustScore >= threshold,
-          score: c.trustScore,
-          tier: c.trustTier,
-          grade: c.trustGrade,
-          flags: c.riskFlags,
-          name: c.name,
-          threshold,
-        },
-        cached: true,
-      });
-    }
-
-    if (!isUpstreamAvailable()) {
-      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
-    }
-
-    const raw = identifier.startsWith('0x') && identifier.length === 42
-      ? await fetchAgentByWallet(identifier)
-      : await fetchAgentById(identifier);
-
-    if (!raw) {
-      return res.status(404).json({
-        data: { safe: false, score: -1, tier: 'UNKNOWN', grade: 'F', flags: ['NOT_FOUND'], name: null, threshold },
-      });
-    }
-
-    recordUpstreamSuccess();
-    const scored = await scoreAgent(raw);
-    scoreCache.set(cacheKey, scored);
-
-    return res.json({
-      data: {
-        safe: scored.trustScore >= threshold,
-        score: scored.trustScore,
-        tier: scored.trustTier,
-        grade: scored.trustGrade,
-        flags: scored.riskFlags,
-        name: scored.name,
-        threshold,
-      },
-      cached: false,
-    });
-  } catch (err) {
-    recordUpstreamFailure();
-    console.error('Trust check error:', err);
-    return res.status(502).json({ error: 'Trust check failed', message: (err as Error).message });
-  }
-});
-
-// --- Top Agents by Category ---
-// Returns the most trusted agents, optionally filtered — useful for discovery
-app.get('/v1/top', async (req, res) => {
-  try {
-    const limit = clampInt(req.query.limit as string, 1, 50, 10);
-    const minScore = clampInt(req.query.minScore as string, 0, 100, 50);
-    const role = (req.query.role as string || '').toUpperCase();
-
-    if (!isUpstreamAvailable()) {
-      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
-    }
-
-    const response = await fetchAgentsPage(1, 100);
-    if (!response || !response.data || response.data.length === 0) {
-      return res.json({ data: { agents: [], total: 0, filters: { minScore, role: role || 'ALL', limit } }, cached: false });
-    }
-    recordUpstreamSuccess();
-
-    const allScored = await Promise.all(response.data.map((r: any) => scoreAgent(r)));
-    let filtered = allScored
-      .filter((a: ScoredAgent) => a.trustScore >= minScore)
-      .sort((a: ScoredAgent, b: ScoredAgent) => b.trustScore - a.trustScore);
-
-    if (role && ['PROVIDER', 'BUYER', 'HYBRID'].includes(role)) {
-      filtered = filtered.filter((a: ScoredAgent) => a.role === role);
-    }
-
-    const top = filtered.slice(0, limit).map((a: ScoredAgent) => ({
-      name: a.name,
-      walletAddress: a.walletAddress,
-      documentId: a.documentId,
-      trustScore: a.trustScore,
-      trustTier: a.trustTier,
-      trustGrade: a.trustGrade,
-      role: a.role,
-      successRate: a.successRate,
-      revenue: a.revenue,
-      jobCount: a.jobCount,
-      riskFlags: a.riskFlags,
-    }));
-
-    return res.json({
-      data: {
-        agents: top,
-        total: filtered.length,
-        filters: { minScore, role: role || 'ALL', limit },
-      },
-      cached: false,
-    });
-  } catch (err) {
-    recordUpstreamFailure();
-    console.error('Top agents error:', err);
-    return res.status(502).json({ error: 'Failed to fetch top agents', message: (err as Error).message });
-  }
-});
-
-// --- Risk Scan (deep) ---
-// Full risk analysis combining trust score + sentinel + behavioral flags
-app.get('/v1/risk/:identifier', async (req, res) => {
-  try {
-    const { identifier } = req.params;
-
-    if (!isValidIdentifier(identifier)) {
-      return res.status(400).json({ error: 'Invalid identifier' });
-    }
-
-    if (!isUpstreamAvailable()) {
-      return res.status(503).json({ error: 'Upstream temporarily unavailable' });
-    }
-
-    const raw = identifier.startsWith('0x') && identifier.length === 42
-      ? await fetchAgentByWallet(identifier)
-      : await fetchAgentById(identifier);
-
-    if (!raw) {
-      return res.status(404).json({ error: 'Agent not found' });
-    }
-
-    recordUpstreamSuccess();
-    const scored = await scoreAgent(raw);
-
-    let sentinel: SentinelVerdict | null = null;
-    try {
-      const context: SentinelContext = { allAgents: [scored], scanTimestamp: Date.now() };
-      sentinel = assessAgent(scored, context);
-    } catch (_) { /* sentinel best-effort */ }
-
-    // Build risk profile
-    const riskFactors: string[] = [];
-    if (scored.trustScore < 25) riskFactors.push('CRITICALLY_LOW_TRUST_SCORE');
-    if (scored.trustScore < 50) riskFactors.push('BELOW_AVERAGE_TRUST');
-    if (scored.successRate < 50) riskFactors.push('LOW_SUCCESS_RATE');
-    if (scored.walletBalance <= 0) riskFactors.push('EMPTY_WALLET');
-    if (scored.daysSinceActive > 30) riskFactors.push('DORMANT');
-    if (scored.uniqueBuyerCount <= 1) riskFactors.push('CONCENTRATED_CLIENT_BASE');
-    if (scored.sybilRiskScore > 50) riskFactors.push('SYBIL_RISK_ELEVATED');
-    if (scored.regressionScore < 50) riskFactors.push('PERFORMANCE_DECLINING');
-
-    const riskLevel = riskFactors.length === 0 ? 'LOW'
-      : riskFactors.length <= 2 ? 'MODERATE'
-      : riskFactors.length <= 4 ? 'HIGH'
-      : 'CRITICAL';
-
-    return res.json({
-      data: {
-        agent: {
-          name: scored.name,
-          walletAddress: scored.walletAddress,
-          documentId: scored.documentId,
-        },
-        riskLevel,
-        trustScore: scored.trustScore,
-        trustTier: scored.trustTier,
-        trustGrade: scored.trustGrade,
-        riskFactors,
-        riskFlags: scored.riskFlags,
-        sentinel: sentinel ? {
-          threatLevel: sentinel.threatLevel,
-          alerts: sentinel.allAlerts?.length || 0,
-          escalation: sentinel.crossSentinelEscalation,
-        } : null,
-        recommendation: riskLevel === 'LOW' ? 'SAFE_TO_TRANSACT'
-          : riskLevel === 'MODERATE' ? 'PROCEED_WITH_CAUTION'
-          : riskLevel === 'HIGH' ? 'ADDITIONAL_VERIFICATION_RECOMMENDED'
-          : 'DO_NOT_TRANSACT',
-        scoreBreakdown: {
-          reliability: scored.reliabilityScore,
-          activity: scored.activityScore,
-          economic: scored.economicScore,
-          reputation: scored.reputationScore,
-          longevity: scored.longevityScore,
-          behavioral: scored.behavioralScore,
-          complexity: scored.complexityScore,
-          sustainability: scored.sustainabilityScore,
-          sybilRisk: scored.sybilRiskScore,
-          regression: scored.regressionScore,
-        },
-      },
-      cached: false,
-    });
-  } catch (err) {
-    recordUpstreamFailure();
-    console.error('Risk scan error:', err);
-    return res.status(502).json({ error: 'Risk scan failed', message: (err as Error).message });
-  }
-});
-
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.7.0',
-    description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
+    version: '1.4.0',
+    description: 'On-chain credit bureau for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
       'GET /v1/score/:identifier': 'Trust score for a single agent (wallet address or documentId)',
@@ -1404,12 +968,6 @@ app.get('/v1', (_req, res) => {
       'GET /v1/alerts': 'Agents with active risk flags',
       'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
       'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
-      'POST /v1/evaluate': 'ACP evaluator — score seller trustworthiness before approving a job (body: {sellerAddress, jobId?, buyerAddress?, deliverable?})',
-      'POST /v1/evaluate/batch': 'Batch evaluate up to 20 agents at once (body: {addresses: string[]})',
-      'POST /v1/watchlist/check': 'Monitor a portfolio of agents for risk changes (body: {addresses: string[], thresholds?: {minScore?, flagOnRiskFlags?}})',
-      'GET /v1/trust/:identifier': 'Quick trust gate — returns safe/unsafe + score in <500ms (query: threshold=50)',
-      'GET /v1/top': 'Most trusted agents in the ecosystem (query: limit, minScore, role)',
-      'GET /v1/risk/:identifier': 'Deep risk analysis — trust + sentinel + behavioral factors + recommendation',
     },
     scoring: {
       dimensions: {
@@ -1471,6 +1029,16 @@ async function start() {
 ╚══════════════════════════════════════════════════╝
     `);
   });
+
+  // Start ACP evaluator listener in the background (optional, non-fatal)
+  if (process.env.WHITELISTED_WALLET_PRIVATE_KEY && process.env.SESSION_ENTITY_KEY_ID) {
+    console.log('[BOOT] Starting ACP evaluator listener...');
+    startEvaluatorListener().catch((err) => {
+      console.error('[BOOT] Evaluator listener failed to start (API will continue running):', err);
+    });
+  } else {
+    console.log('[BOOT] ACP evaluator listener NOT started (missing WHITELISTED_WALLET_PRIVATE_KEY or SESSION_ENTITY_KEY_ID)');
+  }
 }
 
 // Graceful shutdown

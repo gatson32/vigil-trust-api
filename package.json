@@ -9,8 +9,7 @@
     "start": "tsx src/server.ts",
     "build": "tsc && node dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "evaluator": "tsx src/lib/evaluator.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@virtuals-protocol/acp-node": "^0.3.0-beta.40",
