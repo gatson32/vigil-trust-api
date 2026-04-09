@@ -167,6 +167,62 @@ async function runMigrations(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_sybil_scan_risk
       ON sybil_scan_results (sybil_risk_score DESC);
+
+    -- ─── MOAT LAYER ──────────────────────────────────────────────
+    -- Daily(ish) snapshots of every DegenClaw agent's VIGIL grade.
+    -- Every row is a permanent entry in the time-series moat.
+    -- A competitor entering later CAN'T backfill this.
+    CREATE TABLE IF NOT EXISTS degenclaw_snapshots (
+      id              BIGSERIAL PRIMARY KEY,
+      agent_name      TEXT NOT NULL,
+      wallet_address  TEXT NOT NULL DEFAULT '',
+      dc_rank         INTEGER,
+      trust_grade     TEXT NOT NULL,
+      trust_score     REAL NOT NULL,
+      trust_tier      TEXT NOT NULL,
+      profitability   REAL NOT NULL DEFAULT 0,
+      consistency     REAL NOT NULL DEFAULT 0,
+      discipline      REAL NOT NULL DEFAULT 0,
+      capital_risk    REAL NOT NULL DEFAULT 0,
+      sample_size     REAL NOT NULL DEFAULT 0,
+      pnl             REAL NOT NULL DEFAULT 0,
+      win_rate        REAL NOT NULL DEFAULT 0,
+      sortino_raw     REAL NOT NULL DEFAULT 0,
+      sortino_clamped REAL NOT NULL DEFAULT 0,
+      profit_factor   REAL NOT NULL DEFAULT 0,
+      trade_count     INTEGER NOT NULL DEFAULT 0,
+      volume          REAL NOT NULL DEFAULT 0,
+      signals         JSONB NOT NULL DEFAULT '[]',
+      raw             JSONB NOT NULL DEFAULT '{}',
+      captured_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dc_snap_agent
+      ON degenclaw_snapshots (agent_name, captured_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_dc_snap_captured
+      ON degenclaw_snapshots (captured_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_dc_snap_wallet
+      ON degenclaw_snapshots (wallet_address, captured_at DESC);
+
+    -- Cross-venue identity graph — links the same agent across
+    -- different trading venues / social handles / wallets.
+    CREATE TABLE IF NOT EXISTS agent_identities (
+      id              BIGSERIAL PRIMARY KEY,
+      canonical_id    TEXT NOT NULL,
+      venue           TEXT NOT NULL,
+      venue_id        TEXT NOT NULL,
+      display_name    TEXT NOT NULL DEFAULT '',
+      wallet_address  TEXT NOT NULL DEFAULT '',
+      socials         JSONB NOT NULL DEFAULT '{}',
+      first_linked    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_confirmed  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (venue, venue_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_identity_canonical
+      ON agent_identities (canonical_id);
   `);
 }
 

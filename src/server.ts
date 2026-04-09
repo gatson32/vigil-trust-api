@@ -26,6 +26,11 @@ import {
   scoreAllAgents as scoreAllDegenClawAgents,
   type DegenClawRiskReport,
 } from './lib/degenclaw.js';
+import {
+  writeDegenClawSnapshot,
+  getAgentHistory as getDegenClawAgentHistory,
+  getSnapshotStats,
+} from './lib/snapshots.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -1582,11 +1587,63 @@ app.get('/degenclaw', async (_req, res) => {
   }
 });
 
+// ============================================================
+//  MOAT LAYER — Time-series snapshots & grade history
+//  Every call to /v1/internal/snapshot writes a permanent row
+//  per agent into degenclaw_snapshots. This is the ONLY part of
+//  VIGIL a competitor cannot retroactively backfill.
+// ============================================================
+
+// Trigger a snapshot write. Protected by SNAPSHOT_KEY env var so
+// only the scheduled task / cron can hit it.
+app.post('/v1/internal/snapshot', async (req, res) => {
+  const providedKey = String(req.headers['x-snapshot-key'] || req.query.key || '');
+  const expectedKey = process.env.SNAPSHOT_KEY || '';
+  if (!expectedKey) {
+    return res.status(503).json({ error: 'SNAPSHOT_KEY_NOT_CONFIGURED', message: 'Server has no SNAPSHOT_KEY set — cannot accept snapshot writes.' });
+  }
+  if (providedKey !== expectedKey) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  try {
+    const result = await writeDegenClawSnapshot();
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: 'SNAPSHOT_FAILED', message: (err as Error).message });
+  }
+});
+
+// Public moat stats — "we have N days of history and X total snapshots"
+app.get('/v1/moat/stats', async (_req, res) => {
+  try {
+    const stats = await getSnapshotStats();
+    return res.json({
+      ...stats,
+      note: 'Time-series history for DegenClaw agents. Every row is a permanent snapshot. Competitors cannot backfill past data.',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'STATS_FAILED', message: (err as Error).message });
+  }
+});
+
+// Grade-history timeline for a single agent (JSON).
+app.get('/v1/degenclaw/:agent/history', async (req, res) => {
+  try {
+    const agent = decodeURIComponent(String(req.params.agent || '')).trim();
+    if (!agent) return res.status(400).json({ error: 'MISSING_AGENT' });
+    const days = Math.min(365, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
+    const history = await getDegenClawAgentHistory(agent, days);
+    return res.json({ agent, days, count: history.length, history });
+  } catch (err) {
+    return res.status(500).json({ error: 'HISTORY_FAILED', message: (err as Error).message });
+  }
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.8.0',
+    version: '1.9.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1610,6 +1667,9 @@ app.get('/v1', (_req, res) => {
       'GET /v1/degenclaw/:agent': 'VIGIL risk report for a single DegenClaw agent (name, id, or wallet)',
       'GET /degenclaw/:agent': 'Public HTML score card for a DegenClaw agent — shareable permalink',
       'GET /degenclaw': 'Public HTML index of the DegenClaw leaderboard ranked by VIGIL trust score',
+      'GET /v1/degenclaw/:agent/history': 'Time-series grade history for a DegenClaw agent (query: days, default 30)',
+      'GET /v1/moat/stats': 'Public moat stats — total snapshots, unique agents, days of history',
+      'POST /v1/internal/snapshot': 'Trigger a full snapshot write (requires X-Snapshot-Key header)',
     },
     scoring: {
       dimensions: {
