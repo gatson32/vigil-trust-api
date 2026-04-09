@@ -11,13 +11,37 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Trigger VIGIL snapshot write
+        env:
+          SNAPSHOT_KEY: ${{ secrets.SNAPSHOT_KEY }}
         run: |
-          response=$(curl -fsS -X POST \
-            -H "X-Snapshot-Key: ${{ secrets.SNAPSHOT_KEY }}" \
+          # Strip any whitespace/newlines from the secret (robust against paste issues)
+          CLEAN_KEY=$(printf '%s' "$SNAPSHOT_KEY" | tr -d '[:space:]')
+          echo "Key length after trim: ${#CLEAN_KEY}"
+          if [ "${#CLEAN_KEY}" -ne 64 ]; then
+            echo "::warning::Expected 64-char hex key, got ${#CLEAN_KEY} chars"
+          fi
+
+          # Write response body and HTTP status to separate files
+          http_code=$(curl -sS -o /tmp/response.json -w "%{http_code}" \
+            --http1.1 \
+            -X POST \
+            -H "X-Snapshot-Key: $CLEAN_KEY" \
             -H "Content-Type: application/json" \
             https://vigil-trust-api.onrender.com/v1/internal/snapshot)
-          echo "$response"
-          echo "$response" | grep -q '"ok":true' || {
-            echo "::error::Snapshot write failed"
+
+          echo "HTTP status: $http_code"
+          echo "Response body:"
+          cat /tmp/response.json
+          echo ""
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Snapshot request returned HTTP $http_code"
+            exit 1
+          fi
+
+          grep -q '"ok":true' /tmp/response.json || {
+            echo "::error::Snapshot response did not include ok:true"
             exit 1
           }
+
+          echo "Snapshot succeeded"
