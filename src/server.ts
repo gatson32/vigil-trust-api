@@ -21,6 +21,11 @@ import {
 import { initDb, closeDb, isDbConnected } from './lib/db.js';
 import { assessAgent, type SentinelVerdict, type SentinelContext } from './lib/sentinel.js';
 import { startEvaluatorListener } from './lib/evaluator.js';
+import {
+  scoreByQuery as scoreDegenClawByQuery,
+  scoreAllAgents as scoreAllDegenClawAgents,
+  type DegenClawRiskReport,
+} from './lib/degenclaw.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -1387,11 +1392,201 @@ app.get('/v1/risk/:identifier', async (req, res) => {
   }
 });
 
+// ============================================================
+//  DEGENCLAW — HTML render helpers
+// ============================================================
+
+function dcEscape(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function dcGradeColor(grade: string): string {
+  return ({ A: '#10b981', B: '#22c55e', C: '#eab308', D: '#f97316', F: '#ef4444' } as Record<string, string>)[grade] || '#64748b';
+}
+
+function dcTierBlurb(tier: string): string {
+  const blurbs: Record<string, string> = {
+    SHARP: 'Strong risk-adjusted returns on a robust sample.',
+    SOLID: 'Process is working. Metrics hold up under scrutiny.',
+    DEVELOPING: 'Mixed signals. More data needed before confident call.',
+    RISKY: 'Capital at elevated risk given current metrics.',
+    DANGER: 'High probability of further losses. Exercise extreme caution.',
+    UNPROVEN: 'Insufficient trade history for a confident rating.',
+  };
+  return blurbs[tier] || '';
+}
+
+function renderDegenClawScoreCard(r: DegenClawRiskReport): string {
+  const color = dcGradeColor(r.trustGrade);
+  const rowBar = (label: string, val: number) =>
+    `<div class="bar-row"><span class="bar-label">${dcEscape(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${val}%;background:${color}"></div></div><span class="bar-val">${val}</span></div>`;
+  const flagList = (items: string[], cls: string, prefix: string) =>
+    items.length === 0 ? '' :
+    `<ul class="flag-list ${cls}">${items.map(f => `<li>${prefix} ${dcEscape(f)}</li>`).join('')}</ul>`;
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VIGIL Risk Score — ${dcEscape(r.agentName)} | DegenClaw</title>
+<meta name="description" content="VIGIL Trust Score ${r.trustScore}/100 (${r.trustGrade}) for ${dcEscape(r.agentName)} — ${dcTierBlurb(r.trustTier)}"/>
+<meta property="og:title" content="VIGIL Risk Score: ${dcEscape(r.agentName)} — ${r.trustGrade} (${r.trustScore}/100)"/>
+<meta property="og:description" content="${dcEscape(dcTierBlurb(r.trustTier))}"/>
+<style>
+:root{--bg:#0b0d12;--card:#13161d;--ink:#e8ecf1;--muted:#8892a6;--line:#20242d;--accent:${color};}
+*{box-sizing:border-box}body{margin:0;font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px}
+.topbar{display:flex;align-items:center;gap:12px;margin-bottom:32px}
+.logo{font-weight:800;letter-spacing:0.02em;font-size:20px}
+.logo span{color:var(--muted);font-weight:500;font-size:14px;margin-left:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 22px;margin-bottom:18px}
+.score-row{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.score-main h1{margin:0 0 4px;font-size:26px;font-weight:700}
+.score-main .sub{color:var(--muted);font-size:14px;margin-bottom:0}
+.grade{display:flex;flex-direction:column;align-items:center;min-width:120px}
+.grade-letter{font-size:72px;font-weight:800;line-height:1;color:var(--accent)}
+.grade-num{font-size:14px;color:var(--muted);margin-top:4px}
+.tier{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:0.04em;background:var(--accent);color:#0b0d12;margin-top:10px}
+.tier-blurb{color:var(--muted);font-size:14px;margin-top:10px}
+.section-title{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 12px;font-weight:600}
+.bar-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:14px}
+.bar-label{min-width:120px;color:var(--muted)}
+.bar-track{flex:1;height:8px;background:#1a1e26;border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s}
+.bar-val{min-width:32px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:6px}
+.stat{background:#0f1218;border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
+.stat-val{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.flag-list{padding:0;margin:8px 0 0;list-style:none;font-size:14px}
+.flag-list li{padding:6px 10px;border-radius:6px;margin-bottom:6px}
+.flag-list.red li{background:#2a1414;color:#fca5a5}
+.flag-list.green li{background:#102418;color:#86efac}
+.reasoning{color:var(--muted);font-size:14px;margin-top:10px}.reasoning p{margin:6px 0}
+.foot{font-size:12px;color:var(--muted);padding:16px 0 0;border-top:1px solid var(--line);margin-top:22px;line-height:1.5}
+a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
+</style></head><body><div class="wrap">
+<div class="topbar"><div class="logo">VIGIL<span>Trust Score for the AI Agent Economy</span></div></div>
+<div class="card"><div class="score-row">
+<div class="score-main">
+<h1>${dcEscape(r.agentName)}${r.tokenSymbol ? ` <span style="color:var(--muted);font-weight:400">$${dcEscape(r.tokenSymbol)}</span>` : ''}</h1>
+<div class="sub">DegenClaw Arena · Rank #${r.leaderboardRank} · <a href="https://degen.virtuals.io" target="_blank" rel="noopener">view on DegenClaw</a></div>
+<div class="tier">${r.trustTier}</div><div class="tier-blurb">${dcTierBlurb(r.trustTier)}</div>
+</div>
+<div class="grade"><div class="grade-letter">${r.trustGrade}</div><div class="grade-num">${r.trustScore} / 100</div></div>
+</div></div>
+<div class="card"><h3 class="section-title">VIGIL Dimensions</h3>
+${rowBar('Profitability', r.profitability)}${rowBar('Consistency', r.consistency)}${rowBar('Discipline', r.discipline)}${rowBar('Capital Risk', r.capitalRisk)}${rowBar('Sample Size', r.sampleSize)}
+</div>
+<div class="card"><h3 class="section-title">Raw Metrics</h3><div class="stats">
+<div class="stat"><div class="stat-label">Realized PnL</div><div class="stat-val">$${r.raw.totalRealizedPnl.toFixed(0)}</div></div>
+<div class="stat"><div class="stat-label">Avg ROE</div><div class="stat-val">${(r.raw.avgRoe*100).toFixed(0)}%</div></div>
+<div class="stat"><div class="stat-label">Win Rate</div><div class="stat-val">${(r.raw.winRate*100).toFixed(0)}%</div></div>
+<div class="stat"><div class="stat-label">Profit Factor</div><div class="stat-val">${r.raw.profitFactor.toFixed(2)}</div></div>
+<div class="stat"><div class="stat-label">Sortino</div><div class="stat-val">${r.raw.sortinoRatio.toFixed(2)}</div></div>
+<div class="stat"><div class="stat-label">Trades</div><div class="stat-val">${r.raw.totalTradeCount}</div></div>
+<div class="stat"><div class="stat-label">Volume</div><div class="stat-val">$${r.raw.totalTradeVolume.toFixed(0)}</div></div>
+</div></div>
+${(r.greenFlags.length>0||r.flags.length>0)?`<div class="card"><h3 class="section-title">Signals</h3>${flagList(r.greenFlags,'green','✓')}${flagList(r.flags,'red','⚠')}</div>`:''}
+<div class="card"><h3 class="section-title">Reasoning</h3><div class="reasoning">${r.reasoning.map(p=>`<p>${dcEscape(p)}</p>`).join('')}</div></div>
+<div class="foot"><strong>${dcEscape(r.disclaimer)}</strong><br/>Wallet: <code>${dcEscape(r.wallet)}</code><br/>Scored: ${r.scoredAt} · Source: ${r.dataSource}<br/>JSON: <a href="/v1/degenclaw/${encodeURIComponent(r.agentName)}">/v1/degenclaw/${dcEscape(r.agentName)}</a> · All agents: <a href="/degenclaw">/degenclaw</a></div>
+</div></body></html>`;
+}
+
+function renderDegenClawNotFound(query: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Not found — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px}p{color:#8892a6}a{color:#60a5fa}</style></head><body><div class="box"><h1>No DegenClaw agent found for "${dcEscape(query)}"</h1><p>Try the agent name exactly as shown on <a href="https://degen.virtuals.io" target="_blank">degen.virtuals.io</a>, its id, or its wallet address.</p><p>Browse the full leaderboard at <a href="/degenclaw">/degenclaw</a></p></div></body></html>`;
+}
+
+function renderDegenClawError(query: string, msg: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Error — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px;color:#ef4444}p{color:#8892a6}code{background:#1a1e26;padding:2px 6px;border-radius:4px;word-break:break-all}</style></head><body><div class="box"><h1>Upstream error</h1><p>We couldn't fetch data for "${dcEscape(query)}" right now.</p><p><code>${dcEscape(msg)}</code></p><p>Try again in a few seconds.</p></div></body></html>`;
+}
+
+function renderDegenClawIndex(all: DegenClawRiskReport[]): string {
+  const top = [...all].sort((a, b) => b.trustScore - a.trustScore).slice(0, 25);
+  const bottom = [...all].filter(r => r.raw.totalTradeCount >= 10).sort((a, b) => a.trustScore - b.trustScore).slice(0, 10);
+  const row = (r: DegenClawRiskReport) => `<tr><td class="rank">#${r.leaderboardRank}</td><td><a href="/degenclaw/${encodeURIComponent(r.agentName)}">${dcEscape(r.agentName)}</a></td><td class="grade" style="color:${dcGradeColor(r.trustGrade)}">${r.trustGrade}</td><td class="num">${r.trustScore}</td><td class="num">$${r.raw.totalRealizedPnl.toFixed(0)}</td><td class="num">${(r.raw.winRate*100).toFixed(0)}%</td><td class="num">${r.raw.sortinoRatio.toFixed(2)}</td><td class="num">${r.raw.totalTradeCount}</td></tr>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>VIGIL × DegenClaw — Risk Rankings for Every Arena Agent</title><meta name="description" content="Independent VIGIL trust scores for every AI agent trading Hyperliquid perps in the DegenClaw Arena."/><style>body{margin:0;font:15px/1.55 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1}.wrap{max-width:960px;margin:0 auto;padding:32px 20px 60px}h1{font-size:28px;margin:0 0 6px}.lede{color:#8892a6;max-width:640px;margin-bottom:32px}h2{font-size:15px;text-transform:uppercase;letter-spacing:0.08em;color:#8892a6;margin:28px 0 12px;font-weight:600}table{width:100%;border-collapse:collapse;background:#13161d;border:1px solid #20242d;border-radius:10px;overflow:hidden}th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #20242d;font-size:14px}th{background:#0f1218;color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600}tr:last-child td{border-bottom:none}td.rank{color:#8892a6;font-variant-numeric:tabular-nums}td.num{text-align:right;font-variant-numeric:tabular-nums}td.grade{font-weight:700;font-size:16px}a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}.foot{color:#8892a6;font-size:12px;margin-top:28px;line-height:1.6}</style></head><body><div class="wrap"><h1>VIGIL × DegenClaw Arena</h1><p class="lede">Independent risk ratings for every AI agent trading Hyperliquid perps. DegenClaw's own AI Council ranks by expected return — VIGIL rates by downside risk. <em>Not investment advice.</em></p><h2>Top 25 by VIGIL Trust Score</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${top.map(row).join('')}</tbody></table><h2>Bottom 10 — Elevated Risk (min 10 trades)</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${bottom.map(row).join('')}</tbody></table><div class="foot">VIGIL Trust Score is informational only — not investment advice, not a recommendation to subscribe, not a guarantee of future performance.<br/>Data from <a href="https://degen.virtuals.io" target="_blank" rel="noopener">degen.virtuals.io</a> public leaderboard · updated every 60s<br/>JSON: <a href="/v1/degenclaw/leaderboard">/v1/degenclaw/leaderboard</a></div></div></body></html>`;
+}
+
+// ============================================================
+//  DEGENCLAW — Risk scoring for Hyperliquid trading agents
+// ============================================================
+
+app.get('/v1/degenclaw/leaderboard', async (req, res) => {
+  try {
+    const limit = clampInt(req.query.limit as string, 1, 1000, 100);
+    const sort = String(req.query.sort || 'trustScore');
+    const order = String(req.query.order || 'desc') === 'asc' ? 1 : -1;
+    const all = await scoreAllDegenClawAgents();
+    const sorted = all.sort((a, b) => {
+      const av = (a as unknown as Record<string, number>)[sort] ?? 0;
+      const bv = (b as unknown as Record<string, number>)[sort] ?? 0;
+      return (av - bv) * order;
+    });
+    return res.json({
+      data: sorted.slice(0, limit).map((r) => ({
+        agentId: r.agentId, agentName: r.agentName, tokenSymbol: r.tokenSymbol,
+        wallet: r.wallet, leaderboardRank: r.leaderboardRank,
+        trustScore: r.trustScore, trustGrade: r.trustGrade, trustTier: r.trustTier,
+        profitability: r.profitability, consistency: r.consistency, discipline: r.discipline,
+        capitalRisk: r.capitalRisk, sampleSize: r.sampleSize,
+        raw: r.raw, flags: r.flags, greenFlags: r.greenFlags,
+        permalink: `/degenclaw/${encodeURIComponent(r.agentName)}`,
+      })),
+      meta: {
+        total: all.length, returned: Math.min(limit, all.length),
+        sort, order: order === 1 ? 'asc' : 'desc',
+        dataSource: 'degenclaw-leaderboard-v1',
+        scoredAt: new Date().toISOString(),
+        disclaimer: 'VIGIL Trust Score is informational only — not investment advice.',
+      },
+    });
+  } catch (err) {
+    return res.status(502).json({ error: 'DEGENCLAW_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+app.get('/v1/degenclaw/:agent', async (req, res) => {
+  try {
+    const query = decodeURIComponent(String(req.params.agent || '')).trim();
+    if (!query) return res.status(400).json({ error: 'MISSING_AGENT', message: 'Agent name, id, or wallet required' });
+    const report = await scoreDegenClawByQuery(query);
+    if (!report) return res.status(404).json({ error: 'AGENT_NOT_FOUND', message: `No DegenClaw agent found for "${query}".` });
+    return res.json(report);
+  } catch (err) {
+    return res.status(502).json({ error: 'DEGENCLAW_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+app.get('/degenclaw/:agent', async (req, res) => {
+  const query = decodeURIComponent(String(req.params.agent || '')).trim();
+  try {
+    const report = await scoreDegenClawByQuery(query);
+    if (!report) { res.status(404).type('html').send(renderDegenClawNotFound(query)); return; }
+    res.type('html').send(renderDegenClawScoreCard(report));
+  } catch (err) {
+    res.status(502).type('html').send(renderDegenClawError(query, (err as Error).message));
+  }
+});
+
+app.get('/degenclaw', async (_req, res) => {
+  try {
+    const all = await scoreAllDegenClawAgents();
+    res.type('html').send(renderDegenClawIndex(all));
+  } catch (err) {
+    res.status(502).type('html').send(renderDegenClawError('leaderboard', (err as Error).message));
+  }
+});
+
 // --- API Documentation root ---
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.7.0',
+    version: '1.8.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1411,6 +1606,10 @@ app.get('/v1', (_req, res) => {
       'GET /v1/trust/:identifier': 'Quick trust gate — returns safe/unsafe + score in <500ms (query: threshold=50)',
       'GET /v1/top': 'Most trusted agents in the ecosystem (query: limit, minScore, role)',
       'GET /v1/risk/:identifier': 'Deep risk analysis — trust + sentinel + behavioral factors + recommendation',
+      'GET /v1/degenclaw/leaderboard': 'VIGIL risk scores for every DegenClaw Arena agent (query: limit, sort, order)',
+      'GET /v1/degenclaw/:agent': 'VIGIL risk report for a single DegenClaw agent (name, id, or wallet)',
+      'GET /degenclaw/:agent': 'Public HTML score card for a DegenClaw agent — shareable permalink',
+      'GET /degenclaw': 'Public HTML index of the DegenClaw leaderboard ranked by VIGIL trust score',
     },
     scoring: {
       dimensions: {
