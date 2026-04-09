@@ -1,0 +1,23 @@
+name: VIGIL Moat Snapshot
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger VIGIL snapshot write
+        run: |
+          response=$(curl -fsS -X POST \
+            -H "X-Snapshot-Key: ${{ secrets.SNAPSHOT_KEY }}" \
+            -H "Content-Type: application/json" \
+            https://vigil-trust-api.onrender.com/v1/internal/snapshot)
+          echo "$response"
+          echo "$response" | grep -q '"ok":true' || {
+            echo "::error::Snapshot write failed"
+            exit 1
+          }
