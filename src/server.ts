@@ -1597,8 +1597,8 @@ app.get('/degenclaw', async (_req, res) => {
 // Trigger a snapshot write. Protected by SNAPSHOT_KEY env var so
 // only the scheduled task / cron can hit it.
 app.post('/v1/internal/snapshot', async (req, res) => {
-  const providedKey = String(req.headers['x-snapshot-key'] || req.query.key || '');
-  const expectedKey = process.env.SNAPSHOT_KEY || '';
+  const providedKey = String(req.headers['x-snapshot-key'] || req.query.key || '').trim();
+  const expectedKey = (process.env.SNAPSHOT_KEY || '').trim();
   if (!expectedKey) {
     return res.status(503).json({ error: 'SNAPSHOT_KEY_NOT_CONFIGURED', message: 'Server has no SNAPSHOT_KEY set — cannot accept snapshot writes.' });
   }
