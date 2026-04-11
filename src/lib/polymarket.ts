@@ -485,8 +485,43 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   else if (n < 250) sampleSizeDim = 88;
   else sampleSizeDim = 100;
 
+  // --- PENALTY 1: PENNY-LOTTERY DETECTION ---
+  // If 80%+ of resolved bets are sub-$0.10, this is a lottery strategy,
+  // not predictive skill. Low-price bets that hit 1-2 times inflate PnL
+  // while appearing "well-calibrated" because expected = 5%, actual = 0.4%.
+  const pennyBets = resolvedBets.filter(b => b.impliedProb < 0.10).length;
+  const pennyRatio = resolvedBets.length > 0 ? pennyBets / resolvedBets.length : 0;
+  let pennyPenalty = 0;
+  if (pennyRatio >= 0.8 && resolvedBets.length >= 10) {
+    pennyPenalty = 40; // massive penalty — this is lottery farming, not skill
+  } else if (pennyRatio >= 0.5 && resolvedBets.length >= 10) {
+    pennyPenalty = 20; // significant penalty — heavily skewed toward penny bets
+  }
+
+  // --- PENALTY 2: RECEIVE-ONLY WALLET ---
+  // A wallet that has never sent a transaction is likely a proxy/settlement
+  // address, not a real trader. Penalize heavily.
+  let receiveOnlyPenalty = 0;
+  if (provenance && provenance.outboundTxCount === 0 && provenance.inboundTxCount > 0) {
+    receiveOnlyPenalty = 15; // cap reduction — can't fully trust a one-way wallet
+  }
+
+  // --- PENALTY 3: PnL DIVERGENCE ---
+  // If API-reported PnL diverges massively from on-chain USDC flows,
+  // either the data is unreliable or something is being misrepresented.
+  let pnlDivPenalty = 0;
+  if (provenance && provenance.usdcTransfers > 0) {
+    const onChainNetUsdc = provenance.totalUsdcIn - provenance.totalUsdcOut;
+    const divergence = Math.abs(totalPnl - onChainNetUsdc);
+    if (divergence > totalVolume * 0.5 && totalVolume > 0) {
+      pnlDivPenalty = 25; // massive divergence — data can't be trusted
+    } else if (divergence > totalVolume * 0.2 && totalVolume > 0) {
+      pnlDivPenalty = 10; // moderate divergence — flag it
+    }
+  }
+
   // --- COMPOSITE SCORE ---
-  const trustScore = Math.round(
+  const rawTrustScore = Math.round(
     calibrationDim * WEIGHTS.calibration +
     profitabilityDim * WEIGHTS.profitability +
     consistencyDim * WEIGHTS.consistency +
@@ -494,12 +529,21 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     sampleSizeDim * WEIGHTS.sampleSize
   );
 
+  // Apply penalties
+  const totalPenalty = pennyPenalty + receiveOnlyPenalty + pnlDivPenalty;
+  const trustScore = Math.max(0, rawTrustScore - totalPenalty);
+
   // Sample-size gate (same as DegenClaw — can't grade what you can't measure)
-  const gatedScore = resolvedBets.length < 5
+  let gatedScore = resolvedBets.length < 5
     ? Math.min(trustScore, 35)
     : resolvedBets.length < 10
       ? Math.min(trustScore, 50)
       : trustScore;
+
+  // Hard cap: penny-lottery + receive-only wallets cannot exceed C grade
+  if (pennyRatio >= 0.8 && receiveOnlyPenalty > 0) {
+    gatedScore = Math.min(gatedScore, 49); // cap at D
+  }
 
   const trustGrade = gradeFromScore(gatedScore);
   const trustTier = resolvedBets.length < 5 ? 'UNPROVEN' : tierFromGrade(trustGrade);
@@ -517,6 +561,11 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     if (calibrationReport.skillDecomposition.skill > 60) greenFlags.push(`Genuine predictive skill detected (${calibrationReport.skillDecomposition.skill}/100)`);
     if (calibrationReport.skillDecomposition.luck > 70) flags.push(`High luck component: ${calibrationReport.skillDecomposition.luck}/100 — returns may not persist`);
   }
+
+  // Penalty flags
+  if (pennyPenalty > 0) flags.push(`Penny-lottery strategy: ${(pennyRatio * 100).toFixed(0)}% of bets at sub-$0.10 — score penalized by ${pennyPenalty} pts`);
+  if (receiveOnlyPenalty > 0) flags.push(`Receive-only wallet: zero outbound transactions — possible proxy/settlement address`);
+  if (pnlDivPenalty > 0) flags.push(`PnL integrity warning: massive divergence between API-reported and on-chain USDC flows — score penalized by ${pnlDivPenalty} pts`);
 
   if (totalPnl > 0) greenFlags.push(`Net profitable: +$${Math.round(totalPnl)} total PnL`);
   if (totalPnl < -100) flags.push(`Net loss: -$${Math.round(Math.abs(totalPnl))} total PnL`);

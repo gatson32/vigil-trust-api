@@ -2118,7 +2118,7 @@ function gradeColor(g: string): string {
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable later)
 const TOP_WALLETS = [
-  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 991533, grade: 'A', score: 85, resolved: 956, calibration: 0 },
+  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 991533, grade: 'F', score: 5, resolved: 956, calibration: 88 },
   { wallet: '0x8f2f04f6a10a8ffadb8b39999b5b3ef40adeb226', name: 'misko1', pnl: 19459, grade: 'C', score: 50, resolved: 8, calibration: 76 },
   { wallet: '0xee67664b7364ad83e8be00942440f7980f3e88df', name: 'PajamaSam', pnl: 4235, grade: 'C', score: 57, resolved: 26, calibration: 0 },
   { wallet: '0x5fc814d89c2aa979bd987add20d6eb39eb0439ef', name: 'Breezy-Entrance', pnl: 3114, grade: 'A', score: 82, resolved: 186, calibration: 86 },
