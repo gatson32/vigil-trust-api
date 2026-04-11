@@ -293,7 +293,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.11.0',
+    version: '1.11.1',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -1985,7 +1985,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.11.0',
+    version: '1.11.1',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -2118,16 +2118,17 @@ function gradeColor(g: string): string {
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable later)
 const TOP_WALLETS = [
-  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 991533, grade: 'F', score: 5, resolved: 956, calibration: 88 },
-  { wallet: '0x8f2f04f6a10a8ffadb8b39999b5b3ef40adeb226', name: 'misko1', pnl: 19459, grade: 'C', score: 50, resolved: 8, calibration: 76 },
-  { wallet: '0xee67664b7364ad83e8be00942440f7980f3e88df', name: 'PajamaSam', pnl: 4235, grade: 'C', score: 57, resolved: 26, calibration: 0 },
-  { wallet: '0x5fc814d89c2aa979bd987add20d6eb39eb0439ef', name: 'Breezy-Entrance', pnl: 3114, grade: 'A', score: 82, resolved: 186, calibration: 86 },
-  { wallet: '0xdcf81c27942328b1ace4ba7505b6898668eaad83', name: 'itaintmuch', pnl: 428, grade: 'D', score: 39, resolved: 24, calibration: 48 },
-  { wallet: '0x32a273090f38e98d9f3d2a85b7072fa11bf3505c', name: '0x32A27', pnl: 191, grade: 'C', score: 50, resolved: 8, calibration: 89 },
-  { wallet: '0x072685d3d5b2fa7aac199e8739ab133288d91f34', name: 'clawytrader', pnl: -179, grade: 'B', score: 76, resolved: 212, calibration: 73 },
-  { wallet: '0x7bff96579b20fe3530e140d6a3c223c9f2127cd6', name: 'KingZeManel', pnl: -87, grade: 'B', score: 74, resolved: 126, calibration: 0 },
-  { wallet: '0x88c8a49547dd631c2b64bb03c2cc676fe1ffd45d', name: 'kwu', pnl: -2318, grade: 'F', score: 33, resolved: 12, calibration: 0 },
-  { wallet: '0xbc43a2f0deb85ba4ad316300762972089c911540', name: 'westminster', pnl: -13203, grade: 'F', score: 24, resolved: 4, calibration: 0 },
+  // Live-verified scores as of v1.11.0 Scoring v2 (2026-04-11)
+  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 992507, grade: 'F', score: 5, resolved: 956, calibration: 88 },
+  { wallet: '0x8f2f04f6a10a8ffadb8b39999b5b3ef40adeb226', name: 'misko1', pnl: 19584, grade: 'D', score: 35, resolved: 8, calibration: 76 },
+  { wallet: '0xee67664b7364ad83e8be00942440f7980f3e88df', name: 'PajamaSam', pnl: 3362, grade: 'D', score: 38, resolved: 36, calibration: 0 },
+  { wallet: '0x5fc814d89c2aa979bd987add20d6eb39eb0439ef', name: 'Breezy-Entrance', pnl: 3286, grade: 'F', score: 27, resolved: 184, calibration: 86 },
+  { wallet: '0xdcf81c27942328b1ace4ba7505b6898668eaad83', name: 'itaintmuch', pnl: 731, grade: 'F', score: 32, resolved: 32, calibration: 0 },
+  { wallet: '0x32a273090f38e98d9f3d2a85b7072fa11bf3505c', name: '0x32A27', pnl: 88, grade: 'F', score: 5, resolved: 2, calibration: 0 },
+  { wallet: '0x7bff96579b20fe3530e140d6a3c223c9f2127cd6', name: 'KingZeManel', pnl: -78, grade: 'C', score: 59, resolved: 136, calibration: 0 },
+  { wallet: '0x072685d3d5b2fa7aac199e8739ab133288d91f34', name: 'clawytrader', pnl: -181, grade: 'F', score: 11, resolved: 210, calibration: 73 },
+  { wallet: '0x88c8a49547dd631c2b64bb03c2cc676fe1ffd45d', name: 'kwu', pnl: -2360, grade: 'F', score: 0, resolved: 12, calibration: 0 },
+  { wallet: '0xbc43a2f0deb85ba4ad316300762972089c911540', name: 'westminster', pnl: -6083, grade: 'F', score: 24, resolved: 4, calibration: 0 },
 ];
 
 function renderHomepage(): string {
