@@ -1,5 +1,5 @@
-// VIGIL — Basescan On-Chain Verification Layer
-// Ground truth from Base chain. No API middleman can fake this.
+// VIGIL — Multi-Chain On-Chain Verification Layer
+// Ground truth from Base + Polygon. No API middleman can fake this.
 //
 // What this provides that NOBODY else has in our space:
 //   1. Wallet provenance — age, tx count, unique counterparties
@@ -7,16 +7,23 @@
 //   3. Contract interaction fingerprint — what protocols has this wallet touched?
 //   4. Sybil detection — fresh wallets with few txs get flagged
 //
-// Uses Etherscan V2 API with chainid=8453 (Base)
+// Uses Etherscan V2 API: chainid=8453 (Base), chainid=137 (Polygon)
 
 import { TTLCache } from './cache.js';
 
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
-const BASE_CHAIN_ID = 8453;
 const USER_AGENT = 'VIGIL-Trust/1.11.0';
 
-// Known contract addresses on Base
-const KNOWN_PROTOCOLS: Record<string, string> = {
+// Supported chains
+export const CHAINS = {
+  BASE: { id: 8453, name: 'Base', usdc: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' },
+  POLYGON: { id: 137, name: 'Polygon', usdc: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359' }, // native USDC on Polygon
+} as const;
+
+export type ChainKey = keyof typeof CHAINS;
+
+// Known contract addresses — Base
+const BASE_PROTOCOLS: Record<string, string> = {
   '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USDC',
   '0x4200000000000000000000000000000000000006': 'WETH',
   '0x940181a94a35a4569e4529a3cdfb74e38fd98631': 'Aerodrome',
@@ -25,6 +32,24 @@ const KNOWN_PROTOCOLS: Record<string, string> = {
   '0x3d4e44eb1374240ce5f1b871ab261cd16335b76a': 'Uniswap V3 Router',
   '0x198ef79f1f515f02dfe9e3115ed9fc07183f02fc': 'Virtuals Protocol',
 };
+
+// Known contract addresses — Polygon (for Polymarket)
+const POLYGON_PROTOCOLS: Record<string, string> = {
+  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': 'USDC',
+  '0x2791bca1f2de4661ed88a30c99a7a9449aa84174': 'USDC.e (Bridged)',
+  '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 'WMATIC',
+  '0x4bfb4297f0c915f612d8b56e822e0c0b2e889ed6': 'Polymarket CTF Exchange',
+  '0x9a26e6d4a93ec9103c16a2c77a7e3ba62c21354c': 'Polymarket Neg Risk CTF Exchange',
+  '0x4d97dcd97ec945f40cf65f87097ace5ea0476045': 'Polymarket Neg Risk Adapter',
+};
+
+function getProtocolsForChain(chainId: number): Record<string, string> {
+  return chainId === CHAINS.POLYGON.id ? POLYGON_PROTOCOLS : BASE_PROTOCOLS;
+}
+
+function getUsdcAddress(chainId: number): string {
+  return chainId === CHAINS.POLYGON.id ? CHAINS.POLYGON.usdc : CHAINS.BASE.usdc;
+}
 
 // Cache wallet provenance for 30 min (on-chain data doesn't change fast)
 const provenanceCache = new TTLCache<WalletProvenance>(1800);
@@ -104,12 +129,12 @@ function getApiKey(): string | null {
   return process.env.BASESCAN_API_KEY?.trim() || null;
 }
 
-async function etherscanFetch<T>(params: Record<string, string>): Promise<T> {
+async function etherscanFetch<T>(params: Record<string, string>, chainId: number = CHAINS.BASE.id): Promise<T> {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('BASESCAN_API_KEY not configured');
 
   const url = new URL(ETHERSCAN_V2);
-  url.searchParams.set('chainid', String(BASE_CHAIN_ID));
+  url.searchParams.set('chainid', String(chainId));
   url.searchParams.set('apikey', apiKey);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, v);
@@ -146,7 +171,7 @@ function delay(ms: number): Promise<void> {
  * Fetch normal transactions for a wallet on Base.
  * Returns up to 1000 most recent transactions.
  */
-export async function fetchTransactions(wallet: string): Promise<BasescanTx[]> {
+export async function fetchTransactions(wallet: string, chainId: number = CHAINS.BASE.id): Promise<BasescanTx[]> {
   const result = await etherscanFetch<BasescanTx[]>({
     module: 'account',
     action: 'txlist',
@@ -156,15 +181,14 @@ export async function fetchTransactions(wallet: string): Promise<BasescanTx[]> {
     page: '1',
     offset: '1000',
     sort: 'asc',
-  });
+  }, chainId);
   return Array.isArray(result) ? result : [];
 }
 
 /**
- * Fetch ERC-20 token transfers for a wallet on Base.
- * Filters for USDC to verify PnL.
+ * Fetch ERC-20 token transfers for a wallet.
  */
-export async function fetchTokenTransfers(wallet: string): Promise<BasescanTokenTx[]> {
+export async function fetchTokenTransfers(wallet: string, chainId: number = CHAINS.BASE.id): Promise<BasescanTokenTx[]> {
   const result = await etherscanFetch<BasescanTokenTx[]>({
     module: 'account',
     action: 'tokentx',
@@ -174,20 +198,20 @@ export async function fetchTokenTransfers(wallet: string): Promise<BasescanToken
     page: '1',
     offset: '2000',
     sort: 'asc',
-  });
+  }, chainId);
   return Array.isArray(result) ? result : [];
 }
 
 /**
- * Fetch ETH balance for a wallet on Base.
+ * Fetch native token balance for a wallet.
  */
-export async function fetchBalance(wallet: string): Promise<string> {
+export async function fetchBalance(wallet: string, chainId: number = CHAINS.BASE.id): Promise<string> {
   const result = await etherscanFetch<string>({
     module: 'account',
     action: 'balance',
     address: wallet,
     tag: 'latest',
-  });
+  }, chainId);
   return result;
 }
 
@@ -199,26 +223,28 @@ export async function fetchBalance(wallet: string): Promise<string> {
  * Compute full wallet provenance from on-chain data.
  * This is the VERIFICATION LAYER — ground truth that can't be faked.
  */
-export async function getWalletProvenance(wallet: string): Promise<WalletProvenance | null> {
-  // Check cache first
-  const cached = provenanceCache.get(wallet.toLowerCase());
+export async function getWalletProvenance(wallet: string, chainId: number = CHAINS.BASE.id): Promise<WalletProvenance | null> {
+  // Check cache first (keyed by wallet+chain)
+  const cacheKey = `${wallet.toLowerCase()}-${chainId}`;
+  const cached = provenanceCache.get(cacheKey);
   if (cached) return cached;
 
   const apiKey = getApiKey();
   if (!apiKey) return null; // graceful degradation if key not set
 
   try {
+    const chainName = chainId === CHAINS.POLYGON.id ? 'Polygon' : 'Base';
+
     // Fetch transactions and token transfers in parallel
     const [txs, tokenTxs] = await Promise.all([
-      fetchTransactions(wallet),
-      delay(200).then(() => fetchTokenTransfers(wallet)), // rate limit gap
+      fetchTransactions(wallet, chainId),
+      delay(200).then(() => fetchTokenTransfers(wallet, chainId)), // rate limit gap
     ]);
 
     if (txs.length === 0 && tokenTxs.length === 0) {
-      // Wallet has no on-chain history on Base
       const empty: WalletProvenance = {
         wallet: wallet.toLowerCase(),
-        chainId: BASE_CHAIN_ID,
+        chainId,
         firstTxTimestamp: 0,
         firstTxDate: 'never',
         walletAgeDays: 0,
@@ -237,12 +263,12 @@ export async function getWalletProvenance(wallet: string): Promise<WalletProvena
         contractInteractions: 0,
         provenanceScore: 0,
         provenanceGrade: 'F',
-        flags: ['No on-chain history on Base chain', 'Wallet may operate on a different chain'],
+        flags: [`No on-chain history on ${chainName} chain`, 'Wallet may operate on a different chain'],
         greenFlags: [],
         fetchedAt: new Date().toISOString(),
         dataSource: 'basescan-v2',
       };
-      provenanceCache.set(wallet.toLowerCase(), empty);
+      provenanceCache.set(cacheKey, empty);
       return empty;
     }
 
@@ -283,16 +309,19 @@ export async function getWalletProvenance(wallet: string): Promise<WalletProvena
 
     // --- Protocol Fingerprinting ---
     const protocolsUsed: string[] = [];
-    for (const [addr, name] of Object.entries(KNOWN_PROTOCOLS)) {
+    const knownProtocols = getProtocolsForChain(chainId);
+    for (const [addr, name] of Object.entries(knownProtocols)) {
       if (contractsUsed.has(addr.toLowerCase())) {
         protocolsUsed.push(name);
       }
     }
 
     // --- USDC Analysis (for PnL cross-check) ---
-    const USDC_ADDRESS = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+    const usdcAddr = getUsdcAddress(chainId);
+    // Match both native USDC and bridged USDC.e on Polygon
     const usdcTxs = tokenTxs.filter(
-      t => t.contractAddress.toLowerCase() === USDC_ADDRESS,
+      t => t.contractAddress.toLowerCase() === usdcAddr ||
+           (chainId === CHAINS.POLYGON.id && t.contractAddress.toLowerCase() === '0x2791bca1f2de4661ed88a30c99a7a9449aa84174'),
     );
     let usdcIn = 0;
     let usdcOut = 0;
@@ -386,7 +415,7 @@ export async function getWalletProvenance(wallet: string): Promise<WalletProvena
 
     const result: WalletProvenance = {
       wallet: walletLower,
-      chainId: BASE_CHAIN_ID,
+      chainId,
       firstTxTimestamp: firstTs,
       firstTxDate: firstTs > 0 ? new Date(firstTs * 1000).toISOString().split('T')[0] : 'never',
       walletAgeDays: ageDays,
@@ -411,7 +440,7 @@ export async function getWalletProvenance(wallet: string): Promise<WalletProvena
       dataSource: 'basescan-v2',
     };
 
-    provenanceCache.set(walletLower, result);
+    provenanceCache.set(cacheKey, result);
     return result;
   } catch (err) {
     // Graceful degradation — on-chain layer is additive, not required

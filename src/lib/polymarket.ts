@@ -6,7 +6,7 @@
 //   data-api.polymarket.com  — trades, positions, activity per wallet
 //   basescan (etherscan v2)  — on-chain verification layer
 
-import { getWalletProvenance, isBasescanConfigured, type WalletProvenance } from './basescan.js';
+import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
 
 const USER_AGENT = 'VIGIL-Trust/1.11.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
@@ -396,8 +396,9 @@ function tierFromGrade(grade: string): 'SHARP' | 'SOLID' | 'DEVELOPING' | 'RISKY
 
 export async function scorePolymarketTrader(wallet: string): Promise<PolymarketRiskReport | null> {
   // Fetch trades, positions, AND on-chain data in parallel
+  // Polymarket runs on Polygon (chain 137), not Base
   const onChainPromise = isBasescanConfigured()
-    ? getWalletProvenance(wallet).catch(() => null)
+    ? getWalletProvenance(wallet, CHAINS.POLYGON.id).catch(() => null)
     : Promise.resolve(null);
 
   const [trades, allPositions, provenance] = await Promise.all([
@@ -547,9 +548,10 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     }
 
     // Inject on-chain signals into flags
-    if (provenance.walletAgeDays < 7) flags.push(`On-chain: wallet only ${provenance.walletAgeDays} days old on Base`);
-    if (provenance.totalTransactions < 5) flags.push(`On-chain: only ${provenance.totalTransactions} transactions on Base`);
-    if (provenance.walletAgeDays >= 180) greenFlags.push(`On-chain: ${provenance.walletAgeDays}-day wallet history on Base`);
+    const chainLabel = provenance.chainId === 137 ? 'Polygon' : 'Base';
+    if (provenance.walletAgeDays < 7) flags.push(`On-chain: wallet only ${provenance.walletAgeDays} days old on ${chainLabel}`);
+    if (provenance.totalTransactions < 5) flags.push(`On-chain: only ${provenance.totalTransactions} transactions on ${chainLabel}`);
+    if (provenance.walletAgeDays >= 180) greenFlags.push(`On-chain: ${provenance.walletAgeDays}-day wallet history on ${chainLabel}`);
     if (provenance.protocolsUsed.length >= 3) greenFlags.push(`On-chain: multi-protocol user (${provenance.protocolsUsed.join(', ')})`);
     if (pnlDivergence !== null && !onChainBlock.pnlVerified) {
       flags.push(`PnL divergence: $${Math.round(pnlDivergence)} gap between API and on-chain USDC flows`);

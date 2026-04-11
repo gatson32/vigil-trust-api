@@ -1816,7 +1816,7 @@ ${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div cla
 
 <div class="card"><div class="sec-title">Signals</div>${greenFlagsHtml}${flagsHtml}</div>
 
-${r.onChain?.provenance ? `<div class="card"><div class="sec-title">On-Chain Verification (Base)</div>
+${r.onChain?.provenance ? `<div class="card"><div class="sec-title">On-Chain Verification (${r.onChain.provenance.chainId === 137 ? 'Polygon' : 'Base'})</div>
 <div class="metrics">
 <div class="metric"><div class="metric-label">Wallet Age</div><div class="metric-val">${r.onChain.provenance.walletAgeDays}d</div></div>
 <div class="metric"><div class="metric-label">Txns on Base</div><div class="metric-val">${r.onChain.provenance.totalTransactions}</div></div>
