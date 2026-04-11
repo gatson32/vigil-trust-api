@@ -31,6 +31,10 @@ import {
   getAgentHistory as getDegenClawAgentHistory,
   getSnapshotStats,
 } from './lib/snapshots.js';
+import {
+  scorePolymarketTrader,
+  type PolymarketRiskReport,
+} from './lib/polymarket.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -1587,6 +1591,220 @@ app.get('/degenclaw', async (_req, res) => {
   }
 });
 
+
+// ============================================================
+//  POLYMARKET — Prediction Market Agent Scoring
+//  PROPRIETARY: Calibration scoring measures genuine predictive
+//  skill vs. speed arb vs. luck. Nobody else computes this.
+// ============================================================
+
+// JSON API: score a Polymarket trader by wallet
+app.get('/v1/polymarket/:wallet', async (req, res) => {
+  try {
+    const wallet = String(req.params.wallet || '').trim();
+    if (!wallet || !wallet.startsWith('0x')) {
+      return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+    }
+    const report = await scorePolymarketTrader(wallet);
+    if (!report) {
+      return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
+    }
+    return res.json(report);
+  } catch (err) {
+    return res.status(502).json({ error: 'POLYMARKET_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+// HTML score card for a Polymarket trader
+app.get('/polymarket/:wallet', async (req, res) => {
+  const wallet = String(req.params.wallet || '').trim();
+  try {
+    const report = await scorePolymarketTrader(wallet);
+    if (!report) {
+      res.status(404).type('html').send(renderPolymarketNotFound(wallet));
+      return;
+    }
+    res.type('html').send(renderPolymarketScoreCard(report));
+  } catch (err) {
+    res.status(502).type('html').send(renderPolymarketError(wallet, (err as Error).message));
+  }
+});
+
+// HTML index (landing page for /polymarket)
+app.get('/polymarket', (_req, res) => {
+  res.type('html').send(renderPolymarketIndex());
+});
+
+// ============================================================
+//  POLYMARKET HTML RENDERERS
+// ============================================================
+
+function pmEscape(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function pmGradeColor(grade: string): string {
+  switch (grade) {
+    case 'A': return '#10b981';
+    case 'B': return '#34d399';
+    case 'C': return '#eab308';
+    case 'D': return '#f97316';
+    default: return '#ef4444';
+  }
+}
+
+function pmBarColor(grade: string): string {
+  switch (grade) {
+    case 'A': case 'B': return '#10b981';
+    case 'C': return '#eab308';
+    default: return '#ef4444';
+  }
+}
+
+function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
+  const gc = pmGradeColor(r.trustGrade);
+  const bc = pmBarColor(r.trustGrade);
+  const dims = [
+    { label: 'Calibration', val: r.calibration },
+    { label: 'Profitability', val: r.profitability },
+    { label: 'Consistency', val: r.consistency },
+    { label: 'Discipline', val: r.discipline },
+    { label: 'Sample Size', val: r.sampleSize },
+  ];
+
+  const greenFlagsHtml = r.greenFlags.map(f => `<div class="signal green">\u2713 ${pmEscape(f)}</div>`).join('');
+  const flagsHtml = r.flags.map(f => `<div class="signal red">\u26A0 ${pmEscape(f)}</div>`).join('');
+
+  const calBucketsHtml = r.calibrationReport.buckets.map(b =>
+    `<tr><td>${b.range}</td><td>${b.totalBets}</td><td>${(b.expectedRate * 100).toFixed(0)}%</td><td>${(b.actualRate * 100).toFixed(0)}%</td><td>${(b.error * 100).toFixed(1)}%</td></tr>`
+  ).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL x ${pmEscape(r.displayName)} - Polymarket Trust Score</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+.hdr{font-size:14px;color:#6b7280;margin-bottom:24px}.hdr b{color:#a78bfa}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
+.hero{display:flex;justify-content:space-between;align-items:flex-start}
+.name{font-size:28px;font-weight:700;color:#fff}.wallet{font-size:12px;color:#6b7280;font-family:monospace;word-break:break-all}
+.tier{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;background:${gc}22;color:${gc};border:1px solid ${gc}44}
+.blurb{color:#9ca3af;margin-top:8px;font-size:14px}
+.grade{font-size:64px;font-weight:800;color:${gc};text-align:right}.score-num{font-size:16px;color:#9ca3af;text-align:right}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
+.dim{display:flex;align-items:center;margin-bottom:10px}.dim-label{width:120px;font-size:14px;color:#9ca3af}
+.dim-bar{flex:1;height:10px;background:#1f2937;border-radius:5px;overflow:hidden;margin:0 12px}
+.dim-fill{height:100%;background:${bc};border-radius:5px}.dim-val{font-size:14px;color:#fff;min-width:30px;text-align:right}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.metric{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:12px}
+.metric-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px}
+.metric-val{font-size:20px;font-weight:700;color:#fff}
+.signal{padding:8px 16px;border-radius:6px;margin-bottom:6px;font-size:13px}
+.green{background:#10b98115;color:#10b981;border:1px solid #10b98130}
+.red{background:#ef444415;color:#ef4444;border:1px solid #ef444430}
+.cal-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+.cal-table th{text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #1f2937}
+.cal-table td{padding:6px 8px;border-bottom:1px solid #1f293744}
+.skill-bar{display:flex;gap:4px;margin-top:8px;height:24px;border-radius:6px;overflow:hidden}
+.skill-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff}
+.foot{margin-top:24px;font-size:11px;color:#4b5563;text-align:center;line-height:1.8}
+.foot a{color:#6b7280}
+</style></head><body>
+<div class="hdr"><b>VIGIL</b> Trust Score for the AI Agent Economy</div>
+<div class="card"><div class="hero"><div>
+<div class="name">${pmEscape(r.displayName)}</div>
+<div class="wallet">${pmEscape(r.wallet)}</div>
+<div>Polymarket Trader</div>
+<div class="tier">${r.trustTier}</div>
+<div class="blurb">${r.trustTier === 'SHARP' ? 'Elite calibration. Metrics hold up under scrutiny.' : r.trustTier === 'SOLID' ? 'Process is working. Metrics hold up under scrutiny.' : r.trustTier === 'DEVELOPING' ? 'Mixed signals. More data needed.' : r.trustTier === 'UNPROVEN' ? 'Insufficient resolved bets for calibration.' : r.trustTier === 'RISKY' ? 'Below-average risk profile. Proceed with caution.' : 'High probability of further losses.'}</div>
+</div><div><div class="grade">${r.trustGrade}</div><div class="score-num">${r.trustScore} / 100</div></div></div></div>
+
+<div class="card"><div class="sec-title">VIGIL Dimensions</div>
+${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div class="dim-bar"><div class="dim-fill" style="width:${d.val}%"></div></div><div class="dim-val">${d.val}</div></div>`).join('')}
+</div>
+
+<div class="card"><div class="sec-title">Raw Metrics</div><div class="metrics">
+<div class="metric"><div class="metric-label">Total PnL</div><div class="metric-val">$${r.raw.totalPnl}</div></div>
+<div class="metric"><div class="metric-label">Win Rate</div><div class="metric-val">${Math.round(r.raw.winRate * 100)}%</div></div>
+<div class="metric"><div class="metric-label">Resolved Bets</div><div class="metric-val">${r.raw.resolvedBets}</div></div>
+<div class="metric"><div class="metric-label">Total Trades</div><div class="metric-val">${r.raw.totalTrades}</div></div>
+<div class="metric"><div class="metric-label">Volume</div><div class="metric-val">$${Math.round(r.raw.totalVolume)}</div></div>
+<div class="metric"><div class="metric-label">Markets</div><div class="metric-val">${r.raw.uniqueMarkets}</div></div>
+<div class="metric"><div class="metric-label">Brier Score</div><div class="metric-val">${r.calibrationReport.brierScore}</div></div>
+<div class="metric"><div class="metric-label">Open Positions</div><div class="metric-val">${r.raw.openPositions}</div></div>
+</div></div>
+
+${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-title">Calibration Analysis</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
+<table class="cal-table"><tr><th>Bucket</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Error</th></tr>${calBucketsHtml}</table>
+<div style="margin-top:12px"><span style="font-size:12px;color:#6b7280">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
+</div>` : ''}
+
+${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill vs. Luck Decomposition</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:12px">How much of returns came from genuine predictive skill vs. variance?</p>
+<div class="skill-bar">
+<div class="skill-seg" style="flex:${r.calibrationReport.skillDecomposition.skill};background:#10b981">Skill ${r.calibrationReport.skillDecomposition.skill.toFixed(0)}%</div>
+<div class="skill-seg" style="flex:${Math.max(r.calibrationReport.skillDecomposition.luck, 1)};background:#6366f1">Luck ${r.calibrationReport.skillDecomposition.luck.toFixed(0)}%</div>
+</div></div>` : ''}
+
+<div class="card"><div class="sec-title">Signals</div>${greenFlagsHtml}${flagsHtml}</div>
+
+<div class="card"><div class="sec-title">Reasoning</div>
+${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
+</div>
+
+<div class="foot"><strong>${pmEscape(r.disclaimer)}</strong><br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
+</body></html>`;
+}
+
+function renderPolymarketNotFound(wallet: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Trader Not Found</title>
+<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#ef4444;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<body><div><h1>404</h1><p>No Polymarket activity found for <code>${pmEscape(wallet)}</code>.</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
+}
+
+function renderPolymarketError(wallet: string, message: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Error</title>
+<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#f97316;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<body><div><h1>502</h1><p>Error scoring <code>${pmEscape(wallet)}</code>: ${pmEscape(message)}</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
+}
+
+function renderPolymarketIndex(): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL x Polymarket - Prediction Market Trust Scoring</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+h1{font-size:32px;color:#fff;margin-bottom:8px}h1 span{color:#a78bfa}
+.sub{color:#9ca3af;font-size:14px;margin-bottom:32px;font-style:italic}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
+.feature{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
+.feat-title{color:#fff;font-weight:600;font-size:15px}.feat-desc{color:#9ca3af;font-size:13px}
+code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#a78bfa}
+.foot{margin-top:32px;font-size:11px;color:#4b5563;text-align:center}
+</style></head><body>
+<h1><span>VIGIL</span> x Polymarket</h1>
+<div class="sub">Independent trust scoring for prediction market traders. Calibration-first methodology. <em>Not investment advice.</em></div>
+
+<div class="card"><div class="sec-title">The Proprietary Layer: Calibration Scoring</div>
+<div class="feature"><div><div class="feat-title">Calibration Analysis</div><div class="feat-desc">When a trader buys YES at $0.70, they imply 70% probability. We check: does the event actually happen 70% of the time? This separates genuine skill from speed arb and luck.</div></div></div>
+<div class="feature"><div><div class="feat-title">Skill vs. Luck Decomposition</div><div class="feat-desc">Returns decomposed into Skill (calibration-weighted alpha), Luck (variance residual). Know what you are buying before you copy-trade.</div></div></div>
+<div class="feature"><div><div class="feat-title">Brier Score + 5-Dimension Trust Rating</div><div class="feat-desc">Calibration (30%), Profitability (20%), Consistency (20%), Discipline (15%), Sample Size (15%).</div></div></div>
+</div>
+
+<div class="card"><div class="sec-title">Score Any Trader</div>
+<p style="font-size:14px;color:#9ca3af;margin-bottom:12px">Paste any Polymarket wallet address:</p>
+<p><code>/polymarket/0x...</code> (HTML card)</p>
+<p><code>/v1/polymarket/0x...</code> (JSON API)</p>
+</div>
+
+<div class="card"><div class="sec-title">What Makes This Different</div>
+<p style="font-size:14px;color:#9ca3af">Every other Polymarket leaderboard ranks by raw P&L. 14 of the top 20 most profitable wallets are bots running structural arbitrage. VIGIL scores what actually matters: <strong style="color:#fff">can this trader predict the future?</strong></p>
+</div>
+
+<div class="foot">VIGIL Trust Score is informational only.<br/><a href="/degenclaw" style="color:#6b7280">DegenClaw Scoring</a> | <a href="/v1" style="color:#6b7280">API Docs</a></div>
+</body></html>`;
+}
+
 // ============================================================
 //  MOAT LAYER — Time-series snapshots & grade history
 //  Every call to /v1/internal/snapshot writes a permanent row
@@ -1643,7 +1861,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.9.0',
+    version: '1.10.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1670,6 +1888,9 @@ app.get('/v1', (_req, res) => {
       'GET /v1/degenclaw/:agent/history': 'Time-series grade history for a DegenClaw agent (query: days, default 30)',
       'GET /v1/moat/stats': 'Public moat stats — total snapshots, unique agents, days of history',
       'POST /v1/internal/snapshot': 'Trigger a full snapshot write (requires X-Snapshot-Key header)',
+      'GET /v1/polymarket/:wallet': 'VIGIL trust report + calibration scoring for a Polymarket trader',
+      'GET /polymarket/:wallet': 'Public HTML score card with calibration analysis',
+      'GET /polymarket': 'Polymarket prediction market trust scoring index',
     },
     scoring: {
       dimensions: {
