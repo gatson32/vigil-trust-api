@@ -58,6 +58,35 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3000',    // local dev
 ];
 
+// Recently scored wallets — displayed on homepage
+interface RecentScore {
+  wallet: string;
+  displayName: string;
+  trustGrade: string;
+  trustScore: number;
+  totalPnl: number;
+  resolvedBets: number;
+  scoredAt: string;
+}
+const recentScores: RecentScore[] = [];
+const MAX_RECENT = 20;
+
+function addRecentScore(r: PolymarketRiskReport): void {
+  // Avoid duplicates — remove existing entry for same wallet
+  const idx = recentScores.findIndex(s => s.wallet === r.wallet);
+  if (idx >= 0) recentScores.splice(idx, 1);
+  recentScores.unshift({
+    wallet: r.wallet,
+    displayName: r.displayName,
+    trustGrade: r.trustGrade,
+    trustScore: r.trustScore,
+    totalPnl: r.raw.totalPnl,
+    resolvedBets: r.raw.resolvedBets,
+    scoredAt: r.scoredAt,
+  });
+  if (recentScores.length > MAX_RECENT) recentScores.pop();
+}
+
 // Rate limiting — simple in-memory sliding window
 const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 minute
 const RATE_LIMIT_MAX = 60;            // 60 requests per minute per IP
@@ -1623,6 +1652,7 @@ app.get('/v1/polymarket/:wallet', async (req, res) => {
     if (!report) {
       return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
     }
+    addRecentScore(report);
     return res.json(report);
   } catch (err) {
     return res.status(502).json({ error: 'POLYMARKET_UPSTREAM_ERROR', message: (err as Error).message });
@@ -1638,6 +1668,7 @@ app.get('/polymarket/:wallet', async (req, res) => {
       res.status(404).type('html').send(renderPolymarketNotFound(wallet));
       return;
     }
+    addRecentScore(report);
     res.type('html').send(renderPolymarketScoreCard(report));
   } catch (err) {
     res.status(502).type('html').send(renderPolymarketError(wallet, (err as Error).message));
@@ -1647,6 +1678,11 @@ app.get('/polymarket/:wallet', async (req, res) => {
 // HTML index (landing page for /polymarket)
 app.get('/polymarket', (_req, res) => {
   res.type('html').send(renderPolymarketIndex());
+});
+
+// JSON API: recently scored wallets
+app.get('/v1/polymarket/recent', (_req, res) => {
+  res.json(recentScores);
 });
 
 // ============================================================
@@ -2072,7 +2108,61 @@ process.on('SIGINT', async () => {
 //  HOMEPAGE RENDERER
 // ============================================================
 
+function hEsc(s: string): string {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function gradeColor(g: string): string {
+  return g === 'A' ? '#10b981' : g === 'B' ? '#34d399' : g === 'C' ? '#eab308' : g === 'D' ? '#f97316' : '#ef4444';
+}
+
+// Pre-scored top Polymarket wallets (hardcoded, refreshable later)
+const TOP_WALLETS = [
+  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 991533, grade: 'A', score: 85, resolved: 956, calibration: 0 },
+  { wallet: '0x8f2f04f6a10a8ffadb8b39999b5b3ef40adeb226', name: 'misko1', pnl: 19459, grade: 'C', score: 50, resolved: 8, calibration: 76 },
+  { wallet: '0xee67664b7364ad83e8be00942440f7980f3e88df', name: 'PajamaSam', pnl: 4235, grade: 'C', score: 57, resolved: 26, calibration: 0 },
+  { wallet: '0x5fc814d89c2aa979bd987add20d6eb39eb0439ef', name: 'Breezy-Entrance', pnl: 3114, grade: 'A', score: 82, resolved: 186, calibration: 86 },
+  { wallet: '0xdcf81c27942328b1ace4ba7505b6898668eaad83', name: 'itaintmuch', pnl: 428, grade: 'D', score: 39, resolved: 24, calibration: 48 },
+  { wallet: '0x32a273090f38e98d9f3d2a85b7072fa11bf3505c', name: '0x32A27', pnl: 191, grade: 'C', score: 50, resolved: 8, calibration: 89 },
+  { wallet: '0x072685d3d5b2fa7aac199e8739ab133288d91f34', name: 'clawytrader', pnl: -179, grade: 'B', score: 76, resolved: 212, calibration: 73 },
+  { wallet: '0x7bff96579b20fe3530e140d6a3c223c9f2127cd6', name: 'KingZeManel', pnl: -87, grade: 'B', score: 74, resolved: 126, calibration: 0 },
+  { wallet: '0x88c8a49547dd631c2b64bb03c2cc676fe1ffd45d', name: 'kwu', pnl: -2318, grade: 'F', score: 33, resolved: 12, calibration: 0 },
+  { wallet: '0xbc43a2f0deb85ba4ad316300762972089c911540', name: 'westminster', pnl: -13203, grade: 'F', score: 24, resolved: 4, calibration: 0 },
+];
+
 function renderHomepage(): string {
+  // Build leaderboard rows
+  const leaderboardRows = TOP_WALLETS.map((w, i) => {
+    const gc = gradeColor(w.grade);
+    const pnlStr = w.pnl >= 0 ? `+$${w.pnl.toLocaleString()}` : `-$${Math.abs(w.pnl).toLocaleString()}`;
+    const pnlColor = w.pnl >= 0 ? '#10b981' : '#ef4444';
+    return `<tr onclick="window.location='/polymarket/${w.wallet}'" style="cursor:pointer">
+<td style="color:#6b7280">${i + 1}</td>
+<td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#4b5563;font-family:monospace">${w.wallet.slice(0,8)}...${w.wallet.slice(-4)}</span></td>
+<td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
+<td><span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}40">${w.grade}</span></td>
+<td style="color:#fff;font-weight:600">${w.score}</td>
+<td>${w.calibration > 0 ? w.calibration : '<span style="color:#4b5563">—</span>'}</td>
+<td style="color:#9ca3af">${w.resolved}</td>
+</tr>`;
+  }).join('');
+
+  // Build recently scored rows
+  const recentRows = recentScores.slice(0, 8).map(s => {
+    const gc = gradeColor(s.trustGrade);
+    const pnlStr = s.totalPnl >= 0 ? `+$${Math.round(s.totalPnl).toLocaleString()}` : `-$${Math.round(Math.abs(s.totalPnl)).toLocaleString()}`;
+    const pnlColor = s.totalPnl >= 0 ? '#10b981' : '#ef4444';
+    const ago = Math.round((Date.now() - new Date(s.scoredAt).getTime()) / 60000);
+    const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`;
+    return `<tr onclick="window.location='/polymarket/${s.wallet}'" style="cursor:pointer">
+<td><span style="color:#fff;font-weight:600">${hEsc(s.displayName)}</span></td>
+<td style="color:${pnlColor};font-weight:600">${pnlStr}</td>
+<td><span style="display:inline-block;width:24px;height:24px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:24px;font-weight:800;font-size:12px;border:1px solid ${gc}40">${s.trustGrade}</span></td>
+<td style="color:#fff">${s.trustScore}</td>
+<td style="color:#6b7280;font-size:12px">${agoStr}</td>
+</tr>`;
+  }).join('');
+
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL — Trust Scores for AI Agents &amp; Prediction Markets</title>
 <meta name="description" content="The first on-chain credit bureau for AI trading agents and prediction market traders. Calibration scoring, on-chain verification, skill vs luck decomposition.">
@@ -2126,6 +2216,8 @@ a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
 .endpoint .desc{color:#6b7280;font-size:12px}
 
 .foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:12px;color:#4b5563}
+table tr:hover td{background:#1f293744}
+table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:background .15s}
 </style>
 <script>
 function doSearch(e) {
@@ -2156,7 +2248,7 @@ function doSearch(e) {
 
 <div class="hero">
   <h1>Trust Scores for <em>AI Agents</em> &amp; <em>Prediction Markets</em></h1>
-  <p>The first on-chain credit bureau that measures genuine predictive skill — not speed, not luck, not raw PnL. Calibration scoring, multi-chain verification, and historical reputation that competitors cannot backfill.</p>
+  <p>Before you copy a trader, check if they're actually skilled — or just lucky. Paste any Polymarket wallet. We'll score their calibration, verify on-chain, and tell you if their edge is real.</p>
 </div>
 
 <div class="search-box">
@@ -2190,6 +2282,41 @@ function doSearch(e) {
     <span class="tag live">LIVE</span>
     <span class="tag chain">Base + Polygon</span>
   </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:56px">
+
+<div class="card" style="overflow-x:auto">
+  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Top Polymarket Traders — Reviewed by VIGIL</div>
+  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">High PnL doesn't mean high skill. See who's actually calibrated vs. who's running on luck.</p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="border-bottom:1px solid #1f2937">
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Cal.</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Resolved</th>
+  </tr>
+  ${leaderboardRows}
+  </table>
+</div>
+
+${recentRows.length > 0 ? `<div class="card">
+  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Recently Scored</div>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="border-bottom:1px solid #1f2937">
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">When</th>
+  </tr>
+  ${recentRows}
+  </table>
+</div>` : ''}
+
 </div>
 
 <div class="moat">
