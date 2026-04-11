@@ -100,11 +100,12 @@ export interface PolymarketRiskReport {
   };
 
   // VIGIL dimensions (0-100)
-  calibration: number;      // PROPRIETARY: how well-calibrated (30%)
-  profitability: number;    // risk-adjusted PnL (20%)
-  consistency: number;      // return stability (20%)
-  discipline: number;       // sizing + diversification (15%)
-  sampleSize: number;       // resolved bet count (15%)
+  calibration: number;      // PROPRIETARY: how well-calibrated (25%)
+  profitability: number;    // risk-adjusted PnL (15%)
+  consistency: number;      // return stability (15%)
+  discipline: number;       // sizing + diversification (10%)
+  sampleSize: number;       // resolved bet count (10%)
+  liveEdge: number;         // unrealized position performance (25%)
 
   // Composite score
   trustScore: number;
@@ -369,11 +370,12 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
 // ============================================================
 
 const WEIGHTS = {
-  calibration: 0.30,
-  profitability: 0.20,
-  consistency: 0.20,
-  discipline: 0.15,
-  sampleSize: 0.15,
+  calibration: 0.25,
+  profitability: 0.15,
+  consistency: 0.15,
+  discipline: 0.10,
+  sampleSize: 0.10,
+  liveEdge: 0.25,       // NEW: unrealized performance on open positions
 };
 
 function gradeFromScore(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
@@ -485,6 +487,42 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   else if (n < 250) sampleSizeDim = 88;
   else sampleSizeDim = 100;
 
+  // --- DIMENSION 6: LIVE EDGE (25%) ---
+  // How are the trader's OPEN positions performing right now?
+  // For each open position: edge = (curPrice - avgPrice) / avgPrice
+  // A trader whose open bets have moved in their favor has real live alpha.
+  let liveEdgeDim = 50; // default neutral if no open positions
+  if (positions.length >= 3) {
+    // Weighted by position size — bigger bets count more
+    let totalWeight = 0;
+    let weightedEdge = 0;
+    let winningPositions = 0;
+    for (const p of positions) {
+      const weight = Math.abs(p.initialValue) || 1;
+      // For YES positions: curPrice > avgPrice = winning
+      // Edge capped at [-1, +1] to prevent outlier distortion
+      const rawEdge = p.avgPrice > 0 ? (p.curPrice - p.avgPrice) / p.avgPrice : 0;
+      const edge = Math.max(-1, Math.min(1, rawEdge));
+      weightedEdge += edge * weight;
+      totalWeight += weight;
+      if (p.curPrice > p.avgPrice) winningPositions++;
+    }
+    const avgEdge = totalWeight > 0 ? weightedEdge / totalWeight : 0;
+    const winPct = winningPositions / positions.length;
+
+    // Combine: 60% weighted edge magnitude, 40% win percentage
+    // avgEdge ranges roughly -1 to +1, map to 0-100
+    const edgeScore = Math.max(0, Math.min(100, (avgEdge + 0.5) * 100));
+    const winPctScore = winPct * 100;
+    liveEdgeDim = edgeScore * 0.6 + winPctScore * 0.4;
+  } else if (positions.length > 0) {
+    // 1-2 open positions: weak signal, slight weight
+    const avgEdge = positions.reduce((s, p) => {
+      return s + (p.avgPrice > 0 ? (p.curPrice - p.avgPrice) / p.avgPrice : 0);
+    }, 0) / positions.length;
+    liveEdgeDim = Math.max(0, Math.min(100, (avgEdge + 0.5) * 100));
+  }
+
   // --- PENALTY 1: PENNY-LOTTERY DETECTION ---
   // If 80%+ of resolved bets are sub-$0.10, this is a lottery strategy,
   // not predictive skill. Low-price bets that hit 1-2 times inflate PnL
@@ -526,19 +564,29 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     profitabilityDim * WEIGHTS.profitability +
     consistencyDim * WEIGHTS.consistency +
     disciplineDim * WEIGHTS.discipline +
-    sampleSizeDim * WEIGHTS.sampleSize
+    sampleSizeDim * WEIGHTS.sampleSize +
+    liveEdgeDim * WEIGHTS.liveEdge
   );
 
   // Apply penalties
   const totalPenalty = pennyPenalty + receiveOnlyPenalty + pnlDivPenalty;
   const trustScore = Math.max(0, rawTrustScore - totalPenalty);
 
-  // Sample-size gate (same as DegenClaw — can't grade what you can't measure)
-  let gatedScore = resolvedBets.length < 5
-    ? Math.min(trustScore, 35)
-    : resolvedBets.length < 10
-      ? Math.min(trustScore, 50)
-      : trustScore;
+  // Sample-size gate — relaxed if trader has significant open positions
+  const totalDataPoints = resolvedBets.length + positions.length;
+  let gatedScore: number;
+  if (resolvedBets.length >= 10) {
+    gatedScore = trustScore; // enough resolved data, no gate
+  } else if (resolvedBets.length >= 5) {
+    gatedScore = Math.min(trustScore, 50);
+  } else if (totalDataPoints >= 20) {
+    // Few resolved but many open positions — cap at C range, let live edge speak
+    gatedScore = Math.min(trustScore, 60);
+  } else if (totalDataPoints >= 5) {
+    gatedScore = Math.min(trustScore, 40);
+  } else {
+    gatedScore = Math.min(trustScore, 25); // almost no data at all
+  }
 
   // Hard cap: penny-lottery + receive-only wallets cannot exceed C grade
   if (pennyRatio >= 0.8 && receiveOnlyPenalty > 0) {
@@ -546,7 +594,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   }
 
   const trustGrade = gradeFromScore(gatedScore);
-  const trustTier = resolvedBets.length < 5 ? 'UNPROVEN' : tierFromGrade(trustGrade);
+  const trustTier = totalDataPoints < 5 ? 'UNPROVEN' : tierFromGrade(trustGrade);
 
   // --- SIGNALS ---
   const reasoning: string[] = [];
@@ -566,6 +614,11 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   if (pennyPenalty > 0) flags.push(`Penny-lottery strategy: ${(pennyRatio * 100).toFixed(0)}% of bets at sub-$0.10 — score penalized by ${pennyPenalty} pts`);
   if (receiveOnlyPenalty > 0) flags.push(`Receive-only wallet: zero outbound transactions — possible proxy/settlement address`);
   if (pnlDivPenalty > 0) flags.push(`PnL integrity warning: massive divergence between API-reported and on-chain USDC flows — score penalized by ${pnlDivPenalty} pts`);
+
+  // Live edge signals
+  if (positions.length >= 3 && liveEdgeDim >= 70) greenFlags.push(`Strong live edge: ${positions.length} open positions trending profitable`);
+  if (positions.length >= 3 && liveEdgeDim < 30) flags.push(`Weak live edge: open positions mostly underwater`);
+  if (positions.length === 0 && resolvedBets.length === 0) flags.push(`No position data: nothing to score`);
 
   if (totalPnl > 0) greenFlags.push(`Net profitable: +$${Math.round(totalPnl)} total PnL`);
   if (totalPnl < -100) flags.push(`Net loss: -$${Math.round(Math.abs(totalPnl))} total PnL`);
@@ -644,6 +697,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     consistency: Math.round(consistencyDim),
     discipline: Math.round(disciplineDim),
     sampleSize: Math.round(sampleSizeDim),
+    liveEdge: Math.round(liveEdgeDim),
     trustScore: gatedScore,
     trustGrade,
     trustTier,

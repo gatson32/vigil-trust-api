@@ -293,7 +293,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.11.1',
+    version: '1.12.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -1779,6 +1779,7 @@ function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
     { label: 'Consistency', val: r.consistency },
     { label: 'Discipline', val: r.discipline },
     { label: 'Sample Size', val: r.sampleSize },
+    { label: 'Live Edge', val: (r as any).liveEdge ?? 50 },
   ];
 
   const greenFlagsHtml = r.greenFlags.map(f => `<div class="signal green">\u2713 ${pmEscape(f)}</div>`).join('');
@@ -1912,7 +1913,7 @@ code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <div class="card"><div class="sec-title">The Proprietary Layer: Calibration Scoring</div>
 <div class="feature"><div><div class="feat-title">Calibration Analysis</div><div class="feat-desc">When a trader buys YES at $0.70, they imply 70% probability. We check: does the event actually happen 70% of the time? This separates genuine skill from speed arb and luck.</div></div></div>
 <div class="feature"><div><div class="feat-title">Skill vs. Luck Decomposition</div><div class="feat-desc">Returns decomposed into Skill (calibration-weighted alpha), Luck (variance residual). Know what you are buying before you copy-trade.</div></div></div>
-<div class="feature"><div><div class="feat-title">Brier Score + 5-Dimension Trust Rating</div><div class="feat-desc">Calibration (30%), Profitability (20%), Consistency (20%), Discipline (15%), Sample Size (15%).</div></div></div>
+<div class="feature"><div><div class="feat-title">Brier Score + 6-Dimension Trust Rating</div><div class="feat-desc">Calibration (25%), Live Edge (25%), Profitability (15%), Consistency (15%), Discipline (10%), Sample Size (10%).</div></div></div>
 </div>
 
 <div class="card"><div class="sec-title">Score Any Trader</div>
@@ -1985,7 +1986,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.11.1',
+    version: '1.12.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -2117,18 +2118,18 @@ function gradeColor(g: string): string {
 }
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable later)
+// Polymarket Top 10 by All-Time PnL — live VIGIL scores (2026-04-11)
 const TOP_WALLETS = [
-  // Live-verified scores as of v1.11.0 Scoring v2 (2026-04-11)
-  { wallet: '0xe8dd7741ccb12350957ec71e9ee332e0d1e6ec86', name: 'influenz.eth', pnl: 992507, grade: 'F', score: 5, resolved: 956, calibration: 88 },
-  { wallet: '0x8f2f04f6a10a8ffadb8b39999b5b3ef40adeb226', name: 'misko1', pnl: 19584, grade: 'D', score: 35, resolved: 8, calibration: 76 },
-  { wallet: '0xee67664b7364ad83e8be00942440f7980f3e88df', name: 'PajamaSam', pnl: 3362, grade: 'D', score: 38, resolved: 36, calibration: 0 },
-  { wallet: '0x5fc814d89c2aa979bd987add20d6eb39eb0439ef', name: 'Breezy-Entrance', pnl: 3286, grade: 'F', score: 27, resolved: 184, calibration: 86 },
-  { wallet: '0xdcf81c27942328b1ace4ba7505b6898668eaad83', name: 'itaintmuch', pnl: 731, grade: 'F', score: 32, resolved: 32, calibration: 0 },
-  { wallet: '0x32a273090f38e98d9f3d2a85b7072fa11bf3505c', name: '0x32A27', pnl: 88, grade: 'F', score: 5, resolved: 2, calibration: 0 },
-  { wallet: '0x7bff96579b20fe3530e140d6a3c223c9f2127cd6', name: 'KingZeManel', pnl: -78, grade: 'C', score: 59, resolved: 136, calibration: 0 },
-  { wallet: '0x072685d3d5b2fa7aac199e8739ab133288d91f34', name: 'clawytrader', pnl: -181, grade: 'F', score: 11, resolved: 210, calibration: 73 },
-  { wallet: '0x88c8a49547dd631c2b64bb03c2cc676fe1ffd45d', name: 'kwu', pnl: -2360, grade: 'F', score: 0, resolved: 12, calibration: 0 },
-  { wallet: '0xbc43a2f0deb85ba4ad316300762972089c911540', name: 'westminster', pnl: -6083, grade: 'F', score: 24, resolved: 4, calibration: 0 },
+  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'F', score: 20, resolved: 0, calibration: 0 },
+  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 6, resolved: 20, calibration: 0 },
+  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 8, resolved: 10, calibration: 17 },
+  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'F', score: 16, resolved: 6, calibration: 21 },
+  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 13, resolved: 0, calibration: 0 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'C', score: 57, resolved: 932, calibration: 59 },
+  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 49, resolved: 178, calibration: 71 },
+  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'C', score: 62, resolved: 194, calibration: 0 },
+  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'F', score: 24, resolved: 794, calibration: 7 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'D', score: 48, resolved: 942, calibration: 84 },
 ];
 
 function renderHomepage(): string {
@@ -2288,8 +2289,8 @@ function doSearch(e) {
 <div style="display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:56px">
 
 <div class="card" style="overflow-x:auto">
-  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Top Polymarket Traders — Reviewed by VIGIL</div>
-  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">High PnL doesn't mean high skill. See who's actually calibrated vs. who's running on luck.</p>
+  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Polymarket Top 10 by PnL — VIGIL Scored</div>
+  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket right now. Most of them are F-grade. That's the point.</p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
   <tr style="border-bottom:1px solid #1f2937">
     <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
