@@ -3,11 +3,12 @@
 // skill vs. speed arb vs. luck. Nobody else computes this.
 //
 // Data sources:
-//   gamma-api.polymarket.com — markets (active/resolved)
 //   data-api.polymarket.com  — trades, positions, activity per wallet
-//   clob.polymarket.com      — orderbook, prices (public)
+//   basescan (etherscan v2)  — on-chain verification layer
 
-const USER_AGENT = 'VIGIL-Trust/1.10.2 (vigil.trust; prediction-market-scoring)';
+import { getWalletProvenance, isBasescanConfigured, type WalletProvenance } from './basescan.js';
+
+const USER_AGENT = 'VIGIL-Trust/1.11.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
 
 // ============================================================
@@ -117,6 +118,14 @@ export interface PolymarketRiskReport {
   reasoning: string[];
   flags: string[];
   greenFlags: string[];
+
+  // On-chain verification (from Basescan — null if API key not configured)
+  onChain: {
+    verified: boolean;
+    provenance: WalletProvenance | null;
+    pnlDivergence: number | null;   // difference between API-reported and on-chain PnL
+    pnlVerified: boolean;
+  } | null;
 
   // Meta
   scoredAt: string;
@@ -386,10 +395,15 @@ function tierFromGrade(grade: string): 'SHARP' | 'SOLID' | 'DEVELOPING' | 'RISKY
 }
 
 export async function scorePolymarketTrader(wallet: string): Promise<PolymarketRiskReport | null> {
-  // Fetch trades and ALL positions (open + redeemed) in parallel
-  const [trades, allPositions] = await Promise.all([
+  // Fetch trades, positions, AND on-chain data in parallel
+  const onChainPromise = isBasescanConfigured()
+    ? getWalletProvenance(wallet).catch(() => null)
+    : Promise.resolve(null);
+
+  const [trades, allPositions, provenance] = await Promise.all([
     fetchTrades(wallet),
     fetchAllPositions(wallet),
+    onChainPromise,
   ]);
 
   if (trades.length === 0 && allPositions.length === 0) return null;
@@ -511,6 +525,41 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   if (uniqueMarkets >= 20) greenFlags.push(`Well-diversified: ${uniqueMarkets} unique markets`);
   if (resolvedBets.length < 10) flags.push(`Thin resolved data: only ${resolvedBets.length} resolved bets`);
 
+  // --- ON-CHAIN VERIFICATION SIGNALS ---
+  let onChainBlock: PolymarketRiskReport['onChain'] = null;
+  let pnlDivergence: number | null = null;
+
+  if (provenance) {
+    onChainBlock = {
+      verified: true,
+      provenance,
+      pnlDivergence: null,
+      pnlVerified: false,
+    };
+
+    // Cross-check PnL: compare API-reported PnL against on-chain USDC net flow
+    const onChainNetUsdc = provenance.totalUsdcIn - provenance.totalUsdcOut;
+    if (provenance.usdcTransfers > 0 && Math.abs(totalPnl) > 0) {
+      pnlDivergence = Math.abs(totalPnl - onChainNetUsdc);
+      onChainBlock.pnlDivergence = Math.round(pnlDivergence * 100) / 100;
+      // PnL is "verified" if divergence is less than 20% of total volume
+      onChainBlock.pnlVerified = pnlDivergence < totalVolume * 0.2;
+    }
+
+    // Inject on-chain signals into flags
+    if (provenance.walletAgeDays < 7) flags.push(`On-chain: wallet only ${provenance.walletAgeDays} days old on Base`);
+    if (provenance.totalTransactions < 5) flags.push(`On-chain: only ${provenance.totalTransactions} transactions on Base`);
+    if (provenance.walletAgeDays >= 180) greenFlags.push(`On-chain: ${provenance.walletAgeDays}-day wallet history on Base`);
+    if (provenance.protocolsUsed.length >= 3) greenFlags.push(`On-chain: multi-protocol user (${provenance.protocolsUsed.join(', ')})`);
+    if (pnlDivergence !== null && !onChainBlock.pnlVerified) {
+      flags.push(`PnL divergence: $${Math.round(pnlDivergence)} gap between API and on-chain USDC flows`);
+    }
+
+    reasoning.push(
+      `On-chain verification: wallet age ${provenance.walletAgeDays} days, ${provenance.totalTransactions} txs, provenance grade ${provenance.provenanceGrade}.`,
+    );
+  }
+
   reasoning.push(
     `${trades.length} total trades across ${uniqueMarkets} markets.`,
     `${resolvedBets.length} bets on resolved markets available for calibration scoring.`,
@@ -548,6 +597,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     trustGrade,
     trustTier,
     calibrationReport,
+    onChain: onChainBlock,
     reasoning,
     flags,
     greenFlags,

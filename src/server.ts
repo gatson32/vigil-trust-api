@@ -35,6 +35,11 @@ import {
   scorePolymarketTrader,
   type PolymarketRiskReport,
 } from './lib/polymarket.js';
+import {
+  getWalletProvenance,
+  isBasescanConfigured,
+  quickSybilCheck,
+} from './lib/basescan.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -254,7 +259,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.10.2',
+    version: '1.11.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -275,6 +280,10 @@ app.get('/v1/health', async (_req, res) => {
       activeClients: rateLimitStore.size,
     },
     history: historyStats,
+    basescan: {
+      configured: isBasescanConfigured(),
+      chain: 'Base (8453)',
+    },
   });
 });
 
@@ -1636,6 +1645,65 @@ app.get('/polymarket', (_req, res) => {
 });
 
 // ============================================================
+//  ON-CHAIN VERIFICATION ENDPOINTS (v1.11.0)
+// ============================================================
+
+// JSON: wallet provenance report from Basescan
+app.get('/v1/onchain/:wallet', async (req, res) => {
+  try {
+    if (!isBasescanConfigured()) {
+      return res.status(503).json({ error: 'BASESCAN_NOT_CONFIGURED', message: 'BASESCAN_API_KEY env var not set.' });
+    }
+    const wallet = String(req.params.wallet || '').trim();
+    if (!wallet || !wallet.startsWith('0x')) {
+      return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+    }
+    const provenance = await getWalletProvenance(wallet);
+    if (!provenance) {
+      return res.status(502).json({ error: 'BASESCAN_ERROR', message: 'Failed to fetch on-chain data.' });
+    }
+    return res.json(provenance);
+  } catch (err) {
+    return res.status(502).json({ error: 'BASESCAN_ERROR', message: (err as Error).message });
+  }
+});
+
+// JSON: quick sybil check
+app.get('/v1/onchain/:wallet/sybil', async (req, res) => {
+  try {
+    if (!isBasescanConfigured()) {
+      return res.status(503).json({ error: 'BASESCAN_NOT_CONFIGURED', message: 'BASESCAN_API_KEY env var not set.' });
+    }
+    const wallet = String(req.params.wallet || '').trim();
+    if (!wallet || !wallet.startsWith('0x')) {
+      return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+    }
+    const result = await quickSybilCheck(wallet);
+    if (!result) {
+      return res.status(502).json({ error: 'BASESCAN_ERROR', message: 'Failed to check wallet.' });
+    }
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: 'BASESCAN_ERROR', message: (err as Error).message });
+  }
+});
+
+// JSON: system status for on-chain layer
+app.get('/v1/onchain/status', (_req, res) => {
+  res.json({
+    configured: isBasescanConfigured(),
+    chain: 'Base (8453)',
+    capabilities: [
+      'wallet-provenance',
+      'sybil-detection',
+      'pnl-verification',
+      'protocol-fingerprinting',
+    ],
+    apiVersion: 'etherscan-v2',
+  });
+});
+
+// ============================================================
 //  POLYMARKET HTML RENDERERS
 // ============================================================
 
@@ -1747,6 +1815,21 @@ ${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div cla
 </div></div>` : ''}
 
 <div class="card"><div class="sec-title">Signals</div>${greenFlagsHtml}${flagsHtml}</div>
+
+${r.onChain?.provenance ? `<div class="card"><div class="sec-title">On-Chain Verification (Base)</div>
+<div class="metrics">
+<div class="metric"><div class="metric-label">Wallet Age</div><div class="metric-val">${r.onChain.provenance.walletAgeDays}d</div></div>
+<div class="metric"><div class="metric-label">Txns on Base</div><div class="metric-val">${r.onChain.provenance.totalTransactions}</div></div>
+<div class="metric"><div class="metric-label">Counterparties</div><div class="metric-val">${r.onChain.provenance.uniqueCounterparties}</div></div>
+<div class="metric"><div class="metric-label">USDC In</div><div class="metric-val">$${Math.round(r.onChain.provenance.totalUsdcIn)}</div></div>
+<div class="metric"><div class="metric-label">USDC Out</div><div class="metric-val">$${Math.round(r.onChain.provenance.totalUsdcOut)}</div></div>
+<div class="metric"><div class="metric-label">Provenance</div><div class="metric-val" style="color:${r.onChain.provenance.provenanceGrade === 'A' ? '#10b981' : r.onChain.provenance.provenanceGrade === 'B' ? '#3b82f6' : r.onChain.provenance.provenanceGrade === 'C' ? '#eab308' : '#ef4444'}">${r.onChain.provenance.provenanceGrade} (${r.onChain.provenance.provenanceScore})</div></div>
+</div>
+${r.onChain.provenance.protocolsUsed.length > 0 ? `<div style="margin-top:12px;font-size:13px;color:#9ca3af">Protocols: ${r.onChain.provenance.protocolsUsed.join(', ')}</div>` : ''}
+${r.onChain.pnlDivergence !== null ? `<div style="margin-top:8px;font-size:13px;color:${r.onChain.pnlVerified ? '#10b981' : '#ef4444'}">PnL ${r.onChain.pnlVerified ? 'verified' : 'divergence'}: $${r.onChain.pnlDivergence} gap between API and on-chain USDC</div>` : ''}
+${r.onChain.provenance.greenFlags.map(f => `<div class="signal green" style="margin-top:6px">\u2713 ${pmEscape(f)}</div>`).join('')}
+${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top:6px">\u26A0 ${pmEscape(f)}</div>`).join('')}
+</div>` : r.onChain === null ? `<div class="card"><div class="sec-title">On-Chain Verification</div><p style="font-size:13px;color:#6b7280">On-chain verification not available. Basescan API key not configured.</p></div>` : ''}
 
 <div class="card"><div class="sec-title">Reasoning</div>
 ${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
@@ -1861,7 +1944,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.10.2',
+    version: '1.11.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -1891,6 +1974,9 @@ app.get('/v1', (_req, res) => {
       'GET /v1/polymarket/:wallet': 'VIGIL trust report + calibration scoring for a Polymarket trader',
       'GET /polymarket/:wallet': 'Public HTML score card with calibration analysis',
       'GET /polymarket': 'Polymarket prediction market trust scoring index',
+      'GET /v1/onchain/:wallet': 'On-chain wallet provenance report from Base via Basescan',
+      'GET /v1/onchain/:wallet/sybil': 'Quick sybil check (wallet age + tx count)',
+      'GET /v1/onchain/status': 'On-chain verification layer status',
     },
     scoring: {
       dimensions: {
