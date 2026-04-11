@@ -7,10 +7,7 @@
 //   data-api.polymarket.com  — trades, positions, activity per wallet
 //   clob.polymarket.com      — orderbook, prices (public)
 
-import { TTLCache } from './cache.js';
-
-const USER_AGENT = 'VIGIL-Trust/1.9.0 (vigil.trust; prediction-market-scoring)';
-const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+const USER_AGENT = 'VIGIL-Trust/1.10.2 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
 
 // ============================================================
@@ -54,18 +51,6 @@ export interface PolymarketPosition {
   outcome: string;
   outcomeIndex: number;
   endDate: string;
-}
-
-export interface ResolvedMarket {
-  id: string;
-  question: string;
-  conditionId: string;
-  slug: string;
-  outcomes: string[];         // ["Yes", "No"]
-  outcomePrices: number[];    // [1, 0] for Yes resolution
-  closed: boolean;
-  endDate: string;
-  volume: number;
 }
 
 /** A single calibration bucket (e.g. bets in the 0.60-0.70 range) */
@@ -140,13 +125,6 @@ export interface PolymarketRiskReport {
 }
 
 // ============================================================
-//  CACHES
-// ============================================================
-
-const resolvedMarketsCache = new TTLCache<Map<string, ResolvedMarket>>(300); // 5 min
-const RESOLVED_KEY = 'resolved-markets';
-
-// ============================================================
 //  FETCHERS
 // ============================================================
 
@@ -188,7 +166,7 @@ export async function fetchTrades(wallet: string, maxTrades = 2000): Promise<Pol
 }
 
 /**
- * Fetch current positions for a wallet.
+ * Fetch current (open) positions for a wallet.
  */
 export async function fetchPositions(wallet: string): Promise<PolymarketPosition[]> {
   const data = await fetchJson<PolymarketPosition[]>(
@@ -198,42 +176,28 @@ export async function fetchPositions(wallet: string): Promise<PolymarketPosition
 }
 
 /**
- * Fetch resolved markets (for calibration matching).
- * Caches for 5 minutes since resolutions don't change often.
+ * Fetch ALL positions (open + redeemed) for calibration.
+ * Positions with curPrice > 0.95 or < 0.05 are effectively resolved.
+ * This is far more reliable than cross-referencing the gamma API,
+ * because it directly reflects the trader's actual bets and outcomes.
  */
-export async function fetchResolvedMarkets(limit = 1000): Promise<Map<string, ResolvedMarket>> {
-  const cached = resolvedMarketsCache.get(RESOLVED_KEY);
-  if (cached) return cached;
+export async function fetchAllPositions(wallet: string): Promise<PolymarketPosition[]> {
+  const all: PolymarketPosition[] = [];
 
-  const raw = await fetchJson<any[]>(
-    `${GAMMA_BASE}/markets?limit=${limit}&closed=true&order=endDate&ascending=false`,
-  );
-
-  const map = new Map<string, ResolvedMarket>();
-  for (const m of raw) {
-    if (!m.conditionId) continue;
-    const outcomes = JSON.parse(m.outcomes || '[]');
-    const prices = JSON.parse(m.outcomePrices || '[]').map(Number);
-
-    // A resolved market has one outcome at price ~1 and others at ~0
-    const hasResolution = prices.some((p: number) => p > 0.9);
-    if (!hasResolution) continue;
-
-    map.set(m.conditionId, {
-      id: m.id,
-      question: m.question || '',
-      conditionId: m.conditionId,
-      slug: m.slug || '',
-      outcomes,
-      outcomePrices: prices,
-      closed: true,
-      endDate: m.endDate || '',
-      volume: m.volumeNum || 0,
-    });
+  for (const redeemed of ['true', 'false']) {
+    let offset = 0;
+    while (offset < 500) {
+      const batch = await fetchJson<PolymarketPosition[]>(
+        `${DATA_BASE}/positions?user=${wallet}&limit=100&offset=${offset}&redeemed=${redeemed}`,
+      );
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      all.push(...batch);
+      if (batch.length < 100) break;
+      offset += 100;
+    }
   }
 
-  resolvedMarketsCache.set(RESOLVED_KEY, map);
-  return map;
+  return all;
 }
 
 // ============================================================
@@ -253,32 +217,33 @@ interface ResolvedBet {
   size: number;           // position size in shares
 }
 
-function matchTradesAgainstResolutions(
-  trades: PolymarketTrade[],
-  resolved: Map<string, ResolvedMarket>,
+/**
+ * Extract resolved bets from positions data.
+ * A position is "resolved" when curPrice > 0.95 (outcome won) or < 0.05 (outcome lost).
+ * avgPrice is the trader's implied probability — what they actually believed.
+ * This is the PROPRIETARY insight: no gamma API cross-reference needed.
+ */
+function extractResolvedBetsFromPositions(
+  allPositions: PolymarketPosition[],
 ): ResolvedBet[] {
   const bets: ResolvedBet[] = [];
 
-  for (const t of trades) {
-    if (t.side !== 'BUY') continue; // only score entry bets, not exits
+  for (const p of allPositions) {
+    const cur = p.curPrice ?? 0.5;
 
-    const market = resolved.get(t.conditionId);
-    if (!market) continue; // market hasn't resolved yet
+    // Only count clearly resolved positions
+    if (cur <= 0.95 && cur >= 0.05) continue;
 
-    // Determine if this bet was correct
-    const resolutionPrices = market.outcomePrices;
-    const winningIndex = resolutionPrices.findIndex(p => p > 0.9);
-    const correct = t.outcomeIndex === winningIndex;
+    const correct = cur > 0.95; // price near 1 = this outcome won
+    const impliedProb = p.avgPrice;  // what they paid = their belief
+    const size = p.size;
 
-    // The price they paid IS their implied probability
-    const impliedProb = t.price;
-
-    // PnL: if correct, gained (1 - price) per share; if wrong, lost price per share
+    // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice per share
     const pnl = correct
-      ? t.size * (1 - t.price)
-      : t.size * (-t.price);
+      ? size * (1 - impliedProb)
+      : size * (-impliedProb);
 
-    bets.push({ impliedProb, correct, pnl, size: t.size });
+    bets.push({ impliedProb, correct, pnl, size });
   }
 
   return bets;
@@ -421,27 +386,34 @@ function tierFromGrade(grade: string): 'SHARP' | 'SOLID' | 'DEVELOPING' | 'RISKY
 }
 
 export async function scorePolymarketTrader(wallet: string): Promise<PolymarketRiskReport | null> {
-  // Fetch all data in parallel
-  const [trades, positions, resolvedMarkets] = await Promise.all([
+  // Fetch trades and ALL positions (open + redeemed) in parallel
+  const [trades, allPositions] = await Promise.all([
     fetchTrades(wallet),
-    fetchPositions(wallet),
-    fetchResolvedMarkets(),
+    fetchAllPositions(wallet),
   ]);
 
-  if (trades.length === 0 && positions.length === 0) return null;
+  if (trades.length === 0 && allPositions.length === 0) return null;
 
-  // --- Match trades against resolved markets for calibration ---
-  const resolvedBets = matchTradesAgainstResolutions(trades, resolvedMarkets);
+  // --- Extract resolved bets from positions for calibration ---
+  // Positions with curPrice > 0.95 or < 0.05 are effectively resolved.
+  // avgPrice = what the trader paid = their implied probability belief.
+  const resolvedBets = extractResolvedBetsFromPositions(allPositions);
   const calibrationReport = computeCalibration(resolvedBets);
+
+  // Separate open positions for portfolio analysis
+  const positions = allPositions.filter(p => {
+    const cur = p.curPrice ?? 0.5;
+    return cur > 0.05 && cur < 0.95; // still open / unresolved
+  });
 
   // --- Compute raw metrics ---
   const buyTrades = trades.filter(t => t.side === 'BUY');
   const uniqueMarkets = new Set(trades.map(t => t.conditionId)).size;
   const totalVolume = trades.reduce((s, t) => s + (t.usdcSize || t.size * t.price), 0);
 
-  // PnL from positions
-  const realizedPnl = positions.reduce((s, p) => s + (p.realizedPnl || 0), 0);
-  const unrealizedPnl = positions.reduce((s, p) => s + (p.cashPnl || 0), 0);
+  // PnL from ALL positions (open + resolved)
+  const realizedPnl = allPositions.reduce((s, p) => s + (p.realizedPnl || 0), 0);
+  const unrealizedPnl = allPositions.reduce((s, p) => s + (p.cashPnl || 0), 0);
   const totalPnl = realizedPnl + unrealizedPnl;
 
   // Win rate from resolved bets (not positions)
