@@ -254,6 +254,11 @@ function formatAgentResponse(agent: ScoredAgent) {
 //  ROUTES
 // ============================================================
 
+// --- Homepage ---
+app.get('/', (_req, res) => {
+  res.type('html').send(renderHomepage());
+});
+
 // --- Health check ---
 app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
@@ -2062,6 +2067,165 @@ process.on('SIGINT', async () => {
   await closeDb();
   process.exit(0);
 });
+
+// ============================================================
+//  HOMEPAGE RENDERER
+// ============================================================
+
+function renderHomepage(): string {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL — Trust Scores for AI Agents &amp; Prediction Markets</title>
+<meta name="description" content="The first on-chain credit bureau for AI trading agents and prediction market traders. Calibration scoring, on-chain verification, skill vs luck decomposition.">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+
+.wrap{max-width:900px;margin:0 auto;padding:32px 24px}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:48px;border-bottom:1px solid #1f2937;padding-bottom:16px}
+.logo{font-size:24px;font-weight:800;color:#fff;letter-spacing:2px}
+.logo span{color:#a78bfa}
+.nav-links{display:flex;gap:20px;font-size:14px}
+
+.hero{text-align:center;margin-bottom:56px}
+.hero h1{font-size:42px;font-weight:800;color:#fff;line-height:1.2;margin-bottom:16px}
+.hero h1 em{font-style:normal;color:#a78bfa}
+.hero p{font-size:18px;color:#9ca3af;max-width:680px;margin:0 auto 32px}
+
+.search-box{max-width:600px;margin:0 auto 16px}
+.search-box form{display:flex;gap:8px}
+.search-box input{flex:1;padding:14px 18px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:16px;outline:none}
+.search-box input:focus{border-color:#a78bfa}
+.search-box select{padding:14px 12px;border-radius:10px;border:1px solid #374151;background:#111827;color:#d1d5db;font-size:14px;cursor:pointer}
+.search-box button{padding:14px 28px;border-radius:10px;border:none;background:#7c3aed;color:#fff;font-weight:700;font-size:15px;cursor:pointer}
+.search-box button:hover{background:#6d28d9}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-bottom:56px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:28px;transition:border-color .2s}
+.card:hover{border-color:#374151}
+.card h3{font-size:18px;font-weight:700;color:#fff;margin-bottom:8px}
+.card p{font-size:14px;color:#9ca3af;margin-bottom:16px}
+.card .tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;margin-right:6px}
+.tag.live{background:#10b98120;color:#10b981;border:1px solid #10b98140}
+.tag.chain{background:#3b82f620;color:#3b82f6;border:1px solid #3b82f640}
+
+.moat{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:32px;margin-bottom:56px}
+.moat h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
+.moat p{font-size:15px;color:#9ca3af;margin-bottom:12px}
+
+.dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:56px}
+.dim{text-align:center;padding:20px;background:#111827;border:1px solid #1f2937;border-radius:10px}
+.dim .pct{font-size:28px;font-weight:800;color:#a78bfa}
+.dim .label{font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+
+.api-sec{margin-bottom:56px}
+.api-sec h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
+.endpoint{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:14px 18px;margin-bottom:8px;font-family:'SF Mono',Consolas,monospace;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.endpoint .method{color:#10b981;font-weight:700;margin-right:12px}
+.endpoint .path{color:#d1d5db}
+.endpoint .desc{color:#6b7280;font-size:12px}
+
+.foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:12px;color:#4b5563}
+</style>
+<script>
+function doSearch(e) {
+  e.preventDefault();
+  var q = document.getElementById('q').value.trim();
+  var v = document.getElementById('vertical').value;
+  if (!q) return;
+  if (v === 'polymarket') {
+    window.location.href = '/polymarket/' + encodeURIComponent(q);
+  } else if (v === 'degenclaw') {
+    window.location.href = '/degenclaw/' + encodeURIComponent(q);
+  } else if (v === 'onchain') {
+    window.location.href = '/v1/onchain/' + encodeURIComponent(q);
+  }
+}
+</script>
+</head><body>
+<div class="wrap">
+
+<div class="nav">
+  <div class="logo"><span>V</span>IGIL</div>
+  <div class="nav-links">
+    <a href="/polymarket">Polymarket</a>
+    <a href="/v1/health">API Health</a>
+    <a href="/v1">API Docs</a>
+  </div>
+</div>
+
+<div class="hero">
+  <h1>Trust Scores for <em>AI Agents</em> &amp; <em>Prediction Markets</em></h1>
+  <p>The first on-chain credit bureau that measures genuine predictive skill — not speed, not luck, not raw PnL. Calibration scoring, multi-chain verification, and historical reputation that competitors cannot backfill.</p>
+</div>
+
+<div class="search-box">
+  <form onsubmit="doSearch(event)">
+    <select id="vertical">
+      <option value="polymarket">Polymarket Wallet</option>
+      <option value="degenclaw">DegenClaw Agent</option>
+      <option value="onchain">On-Chain Lookup</option>
+    </select>
+    <input type="text" id="q" placeholder="Enter wallet address (0x...) or agent name" autocomplete="off" />
+    <button type="submit">Score</button>
+  </form>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <h3>Polymarket Traders</h3>
+    <p>Calibration scoring for prediction market traders. Brier scores, overconfidence detection, skill vs. luck decomposition. Does this trader actually know what's going to happen?</p>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Polygon</span>
+  </div>
+  <div class="card">
+    <h3>DegenClaw AI Agents</h3>
+    <p>Trust scores for autonomous trading agents on Virtuals Protocol. Five-dimension risk analysis with historical grade snapshots every 6 hours.</p>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Base</span>
+  </div>
+  <div class="card">
+    <h3>On-Chain Verification</h3>
+    <p>Wallet provenance scoring from Basescan. Age, transaction history, counterparty diversity, USDC flow cross-checks, protocol fingerprinting, sybil detection.</p>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Base + Polygon</span>
+  </div>
+</div>
+
+<div class="moat">
+  <h2>What Makes VIGIL Different</h2>
+  <p>14 of the top 20 most profitable wallets on prediction market leaderboards are bots running structural arbitrage. Raw PnL doesn't tell you if someone can actually predict the future — it tells you if they're fast.</p>
+  <p>VIGIL is the first system that answers the real question: <strong style="color:#fff">when a trader buys at $0.70, implying 70% confidence, does the event actually happen 70% of the time?</strong> That's calibration — and nobody else computes it.</p>
+  <p>Every score is backed by on-chain verification from Base and Polygon. Wallet age, transaction count, USDC flow cross-checks, protocol fingerprinting. We don't trust what APIs report — we verify it against the blockchain.</p>
+</div>
+
+<div class="dims">
+  <div class="dim"><div class="pct">30%</div><div class="label">Calibration</div></div>
+  <div class="dim"><div class="pct">20%</div><div class="label">Profitability</div></div>
+  <div class="dim"><div class="pct">20%</div><div class="label">Consistency</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Discipline</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Sample Size</div></div>
+</div>
+
+<div class="api-sec">
+  <h2>API Endpoints</h2>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet</span></div><span class="desc">On-chain wallet provenance (Base + Polygon)</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet/sybil</span></div><span class="desc">Quick sybil detection check</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/score/:identifier</span></div><span class="desc">Trust score for a Virtuals Protocol agent</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/leaderboard</span></div><span class="desc">Paginated agent rankings</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/health</span></div><span class="desc">Service health + system status</span></div>
+</div>
+
+<div class="foot">
+  VIGIL Trust Score is informational only — not investment advice.<br/>
+  Built by Freedom United Works &middot; v1.11.0
+</div>
+
+</div>
+</body></html>`;
+}
 
 start().catch(err => {
   console.error('[FATAL] Failed to start server:', err);
