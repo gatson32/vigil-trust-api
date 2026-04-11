@@ -201,12 +201,12 @@ export async function fetchPositions(wallet: string): Promise<PolymarketPosition
  * Fetch resolved markets (for calibration matching).
  * Caches for 5 minutes since resolutions don't change often.
  */
-export async function fetchResolvedMarkets(limit = 500): Promise<Map<string, ResolvedMarket>> {
+export async function fetchResolvedMarkets(limit = 1000): Promise<Map<string, ResolvedMarket>> {
   const cached = resolvedMarketsCache.get(RESOLVED_KEY);
   if (cached) return cached;
 
   const raw = await fetchJson<any[]>(
-    `${GAMMA_BASE}/markets?limit=${limit}&active=false&closed=true`,
+    `${GAMMA_BASE}/markets?limit=${limit}&closed=true&order=endDate&ascending=false`,
   );
 
   const map = new Map<string, ResolvedMarket>();
