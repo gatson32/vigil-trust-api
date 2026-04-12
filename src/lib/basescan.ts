@@ -142,20 +142,60 @@ async function etherscanFetch<T>(params: Record<string, string>, chainId: number
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const res = await fetch(url.toString(), {
-      headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new Error(`Basescan HTTP ${res.status}`);
-    const data = await res.json() as { status: string; message: string; result: T };
-    if (data.status === '0' && data.message === 'NOTOK') {
-      throw new Error(`Basescan error: ${data.result}`);
+
+  let retries = 0;
+  const maxRetries = 2;
+
+  while (retries <= maxRetries) {
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+        signal: ctrl.signal,
+      });
+
+      // Handle rate limit with retry
+      if (res.status === 429) {
+        if (retries < maxRetries) {
+          retries++;
+          await delay(1000 * retries); // 1s, 2s backoff
+          continue;
+        }
+      }
+
+      if (!res.ok) throw new Error(`Basescan HTTP ${res.status}`);
+      const data = await res.json() as { status: string; message: string; result: T };
+
+      // Check for rate limit error in response
+      if (data.message && data.message.includes('rate')) {
+        if (retries < maxRetries) {
+          retries++;
+          await delay(1000 * retries); // 1s, 2s backoff
+          continue;
+        }
+      }
+
+      if (data.status === '0' && data.message === 'NOTOK') {
+        // Generic error message to avoid leaking API key
+        throw new Error('Basescan API returned an error');
+      }
+      return data.result;
+    } catch (err) {
+      if (retries < maxRetries && (err instanceof Error ? err.message.includes('rate') || err.message.includes('429') : false)) {
+        retries++;
+        await delay(1000 * retries);
+        continue;
+      }
+      throw err;
+    } finally {
+      if (retries > 0 || !url.toString().includes('apikey')) {
+        // Only clear if not retrying
+        if (retries === 0) clearTimeout(timer);
+      }
     }
-    return data.result;
-  } finally {
-    clearTimeout(timer);
   }
+
+  clearTimeout(timer);
+  throw new Error('Basescan API failed after retries');
 }
 
 // Rate limit: Etherscan free = 5 calls/sec. Add small delay between calls.
@@ -182,7 +222,11 @@ export async function fetchTransactions(wallet: string, chainId: number = CHAINS
     offset: '1000',
     sort: 'asc',
   }, chainId);
-  return Array.isArray(result) ? result : [];
+  if (!Array.isArray(result)) {
+    console.warn(`[basescan] fetchTransactions returned non-array for ${wallet}: API may have failed or returned error`);
+    return [];
+  }
+  return result;
 }
 
 /**
@@ -199,7 +243,11 @@ export async function fetchTokenTransfers(wallet: string, chainId: number = CHAI
     offset: '2000',
     sort: 'asc',
   }, chainId);
-  return Array.isArray(result) ? result : [];
+  if (!Array.isArray(result)) {
+    console.warn(`[basescan] fetchTokenTransfers returned non-array for ${wallet}: API may have failed or returned error`);
+    return [];
+  }
+  return result;
 }
 
 /**
@@ -308,6 +356,13 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
     }
 
     // --- Protocol Fingerprinting ---
+    // Add token transfer contract addresses to contractsUsed for protocol detection
+    for (const tx of tokenTxs) {
+      if (tx.contractAddress) {
+        contractsUsed.add(tx.contractAddress.toLowerCase());
+      }
+    }
+
     const protocolsUsed: string[] = [];
     const knownProtocols = getProtocolsForChain(chainId);
     for (const [addr, name] of Object.entries(knownProtocols)) {
@@ -326,7 +381,9 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
     let usdcIn = 0;
     let usdcOut = 0;
     for (const tx of usdcTxs) {
-      const amount = Number(tx.value) / 1e6; // USDC has 6 decimals
+      // Use tokenDecimal field if available; default to 6 for USDC
+      const decimals = Number(tx.tokenDecimal) || 6;
+      const amount = Number(tx.value) / Math.pow(10, decimals);
       if (tx.to.toLowerCase() === walletLower) {
         usdcIn += amount;
       } else {
@@ -335,16 +392,27 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
     }
 
     // --- Wallet Age ---
-    // Check both regular txs AND token transfers for earliest activity
-    const firstTxTs = successTxs.length > 0 ? Number(successTxs[0].timeStamp) : Infinity;
-    const firstTokenTs = tokenTxs.length > 0 ? Number(tokenTxs[0].timeStamp) : Infinity;
-    const firstTs = Math.min(firstTxTs, firstTokenTs) === Infinity ? 0 : Math.min(firstTxTs, firstTokenTs);
+    // Collect all timestamps from both txs and tokenTxs, filter valid ones, take minimum
+    const timestamps: number[] = [];
+    for (const tx of successTxs) {
+      const ts = Number(tx.timeStamp);
+      if (ts > 0) timestamps.push(ts);
+    }
+    for (const tx of tokenTxs) {
+      const ts = Number(tx.timeStamp);
+      if (ts > 0) timestamps.push(ts);
+    }
+    const firstTs = timestamps.length > 0 ? Math.min(...timestamps) : 0;
     const nowSec = Math.floor(Date.now() / 1000);
     const ageDays = firstTs > 0 ? Math.floor((nowSec - firstTs) / 86400) : 0;
 
     // --- ETH formatting ---
     const weiToEth = (wei: bigint): string => {
-      const eth = Number(wei) / 1e18;
+      // Use BigInt division for integer part to avoid overflow
+      const integerPart = wei / BigInt('1000000000000000000');
+      const remainder = wei % BigInt('1000000000000000000');
+      const decimalPart = Number(remainder) / 1e18;
+      const eth = Number(integerPart) + decimalPart;
       return eth.toFixed(6);
     };
 

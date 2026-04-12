@@ -226,6 +226,7 @@ interface MarketResolution {
 
 // Cache market resolutions — they never change once resolved
 const marketResolutionCache = new Map<string, MarketResolution>();
+const CACHE_MAX_SIZE = 5000;
 
 async function fetchMarketResolution(conditionId: string): Promise<MarketResolution | null> {
   if (marketResolutionCache.has(conditionId)) return marketResolutionCache.get(conditionId)!;
@@ -244,7 +245,14 @@ async function fetchMarketResolution(conditionId: string): Promise<MarketResolut
       winningOutcome: resolved ? (winner.outcome || null) : null,
     };
 
-    if (resolved) marketResolutionCache.set(conditionId, result);
+    if (resolved) {
+      // Enforce cache size limit — delete oldest entries if exceeding max
+      if (marketResolutionCache.size >= CACHE_MAX_SIZE) {
+        const firstKey = marketResolutionCache.keys().next().value;
+        if (firstKey) marketResolutionCache.delete(firstKey);
+      }
+      marketResolutionCache.set(conditionId, result);
+    }
     return result;
   } catch {
     return null;
@@ -319,15 +327,19 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
     let avgEntryPrice: number;
 
     if (yesNet > noNet) {
+      // Skip if no YES buys were made
+      if (yesBought === 0) continue;
       traderSide = 'Yes';
       netShares = yesNet;
       // Average entry price = total buy cost / total bought (not net)
       // This represents their average conviction level
-      avgEntryPrice = yesBought > 0 ? yesBuyCost / yesBought : 0.5;
+      avgEntryPrice = yesBuyCost / yesBought;
     } else {
+      // Skip if no NO buys were made
+      if (noBought === 0) continue;
       traderSide = 'No';
       netShares = noNet;
-      avgEntryPrice = noBought > 0 ? noBuyCost / noBought : 0.5;
+      avgEntryPrice = noBuyCost / noBought;
     }
 
     const impliedProb = Math.max(0.01, Math.min(0.99, avgEntryPrice));
@@ -338,11 +350,16 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
       ? netShares * (1 - avgEntryPrice)
       : -netShares * avgEntryPrice;
 
+    // Determine side: if yesNet > noNet, they held YES; if noNet > yesNet, they held NO
+    // Since we always bought to have a net position, side is BUY
+    const side: 'BUY' | 'SELL' = 'BUY';
+
     resolvedBets.push({
       impliedProb,
       correct,
       pnl,
       size: netShares,
+      side,
     });
   }
 
@@ -364,6 +381,7 @@ interface ResolvedBet {
   correct: boolean;       // did the market resolve in their favor?
   pnl: number;           // what they made/lost
   size: number;           // position size in shares
+  side: 'BUY' | 'SELL';   // whether this was a buy or sell position
 }
 
 /**
@@ -387,12 +405,16 @@ function extractResolvedBetsFromPositions(
     const impliedProb = p.avgPrice;  // what they paid = their belief
     const size = p.size;
 
+    // Infer side: if avgPrice < 0.5 and size > 0, likely a BUY (bought low)
+    // if avgPrice > 0.5 and size > 0, could be BUY or SELL; use size sign
+    const side: 'BUY' | 'SELL' = impliedProb < 0.5 ? 'BUY' : 'SELL';
+
     // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice per share
     const pnl = correct
       ? size * (1 - impliedProb)
       : size * (-impliedProb);
 
-    bets.push({ impliedProb, correct, pnl, size });
+    bets.push({ impliedProb, correct, pnl, size, side });
   }
 
   return bets;
@@ -470,7 +492,15 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
   // Skill = how much of the PnL came from calibration (genuine alpha)
   // Luck = variance residual
   const totalPnl = bets.reduce((s, b) => s + b.pnl, 0);
-  const totalStaked = bets.reduce((s, b) => s + b.size * b.impliedProb, 0);
+  // For BUY bets: staked = size * impliedProb
+  // For SELL bets: staked = size * (1 - impliedProb)
+  const totalStaked = bets.reduce((s, b) => {
+    if (b.side === 'BUY') {
+      return s + b.size * b.impliedProb;
+    } else {
+      return s + b.size * (1 - b.impliedProb);
+    }
+  }, 0);
   const roi = totalStaked > 0 ? totalPnl / totalStaked : 0;
 
   // Skill metric: inverse of calibration error, scaled 0-100
@@ -561,12 +591,48 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   if (resolvedBets.length < 20 && trades.length >= 50 && uniqueMarketCount >= 10) {
     try {
       const clobResolved = await resolveTradesViaClob(trades);
-      if (clobResolved.length > resolvedBets.length) {
-        // CLOB lookup found more resolved bets — use it
-        // Merge: keep position-based bets and add any new ones from CLOB
-        const positionConditionIds = new Set(allPositions.map(p => p.conditionId));
-        const newBets = clobResolved; // CLOB already handles deduplication via conditionId grouping
-        resolvedBets = newBets.length > resolvedBets.length ? newBets : resolvedBets;
+      if (clobResolved.length > 0) {
+        // Merge: deduplicate by conditionId and union both sets
+        // Build a map of conditionId -> ResolvedBet from position-based bets
+        const positionBetsMap = new Map<string, ResolvedBet>();
+        const tradesByConditionId = new Map<string, PolymarketTrade[]>();
+        for (const trade of trades) {
+          if (!tradesByConditionId.has(trade.conditionId)) {
+            tradesByConditionId.set(trade.conditionId, []);
+          }
+          tradesByConditionId.get(trade.conditionId)!.push(trade);
+        }
+        for (const bet of resolvedBets) {
+          const conditionIds = Array.from(tradesByConditionId.keys());
+          // Find the conditionId for this bet by matching with trades
+          for (const cId of conditionIds) {
+            const tradesForCondition = tradesByConditionId.get(cId) || [];
+            // Simple heuristic: match by impliedProb proximity to trade prices
+            if (tradesForCondition.some(t => Math.abs(t.price - bet.impliedProb) < 0.01)) {
+              positionBetsMap.set(cId, bet);
+              break;
+            }
+          }
+        }
+
+        // Create a map of conditionId -> ResolvedBet from CLOB bets
+        const clobBetsMap = new Map<string, ResolvedBet>();
+        for (const bet of clobResolved) {
+          const conditionIds = Array.from(tradesByConditionId.keys());
+          for (const cId of conditionIds) {
+            const tradesForCondition = tradesByConditionId.get(cId) || [];
+            if (tradesForCondition.some(t => Math.abs(t.price - bet.impliedProb) < 0.01)) {
+              clobBetsMap.set(cId, bet);
+              break;
+            }
+          }
+        }
+
+        // Union: all conditionIds from both sources
+        const allConditionIds = new Set([...positionBetsMap.keys(), ...clobBetsMap.keys()]);
+        resolvedBets = Array.from(allConditionIds).map(cId =>
+          positionBetsMap.get(cId) || clobBetsMap.get(cId)!
+        );
       }
     } catch {
       // CLOB lookup failed — continue with position-based data
@@ -612,15 +678,17 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
 
   // --- DIMENSION 3: CONSISTENCY (20%) ---
   // How stable are the per-bet returns?
+  let consistencyDim: number;
   if (resolvedBets.length >= 5) {
     const betReturns = resolvedBets.map(b => b.pnl / (b.size * b.impliedProb || 1));
     const mean = betReturns.reduce((s, v) => s + v, 0) / betReturns.length;
     const variance = betReturns.reduce((s, v) => s + (v - mean) ** 2, 0) / betReturns.length;
-    const cv = mean !== 0 ? Math.sqrt(variance) / Math.abs(mean) : 10;
+    const cv = mean !== 0 ? Math.sqrt(variance) / Math.abs(mean) : 2;
     // Lower CV = more consistent. CV of 0 = 100, CV of 3+ = 0
-    var consistencyDim = Math.max(0, Math.min(100, (1 - cv / 3) * 100));
+    // Use cv=2 for break-even traders (mean=0)
+    consistencyDim = Math.max(0, Math.min(100, (1 - cv / 3) * 100));
   } else {
-    var consistencyDim = 10; // thin data penalty
+    consistencyDim = 10; // thin data penalty
   }
 
   // --- DIMENSION 4: DISCIPLINE (15%) ---
@@ -629,7 +697,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   // Check for concentration: largest position as % of total
   const positionSizes = positions.map(p => Math.abs(p.initialValue));
   const totalValue = positionSizes.reduce((s, v) => s + v, 0);
-  const maxPosition = Math.max(...positionSizes, 0);
+  const maxPosition = positionSizes.length > 0 ? Math.max(...positionSizes) : 0;
   const concentration = totalValue > 0 ? maxPosition / totalValue : 1;
   const concentrationScore = Math.max(0, Math.min(100, (1 - concentration) * 100));
   const disciplineDim = (marketDiv * 0.5) + (concentrationScore * 0.5);

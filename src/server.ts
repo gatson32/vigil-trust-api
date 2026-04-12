@@ -3,6 +3,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { scoreAgent, TIER_CONFIG, type ScoredAgent } from './lib/scoring.js';
 import {
   fetchAgentsPage,
@@ -172,10 +173,7 @@ const API_TIERS = {
 const apiKeyStore = new Map<string, ApiKeyRecord>();
 
 function generateApiKey(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let key = 'vgl_';
-  for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
-  return key;
+  return 'vgl_' + randomBytes(24).toString('base64url').slice(0, 32);
 }
 
 function validateApiKey(key: string): ApiKeyRecord | null {
@@ -251,16 +249,15 @@ function isUpstreamAvailable(): boolean {
 //  MIDDLEWARE
 // ============================================================
 
-// CORS — restricted to known origins (falls back to open for API consumers)
+// CORS — restricted to known origins
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (curl, server-to-server, mobile apps)
     if (!origin) return callback(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    // For now, allow all origins but log unknown ones
-    // TODO: Restrict to API key holders only
-    console.log(`[CORS] Request from unlisted origin: ${origin}`);
-    return callback(null, true);
+    // Reject unknown origins
+    console.log(`[CORS] Request from unlisted origin rejected: ${origin}`);
+    return callback(new Error('CORS not allowed'), false);
   },
   methods: ['GET', 'POST'],
   maxAge: 86400,
@@ -1689,10 +1686,15 @@ app.get('/v1/degenclaw/leaderboard', async (req, res) => {
     const limit = clampInt(req.query.limit as string, 1, 1000, 100);
     const sort = String(req.query.sort || 'trustScore');
     const order = String(req.query.order || 'desc') === 'asc' ? 1 : -1;
+
+    // Whitelist allowed sort fields
+    const allowedSorts = ['trustScore', 'trustGrade', 'profitability', 'consistency', 'discipline', 'capitalRisk', 'sampleSize', 'agentName', 'leaderboardRank'];
+    const sortField = allowedSorts.includes(sort) ? sort : 'trustScore';
+
     const all = await scoreAllDegenClawAgents();
     const sorted = all.sort((a, b) => {
-      const av = (a as unknown as Record<string, number>)[sort] ?? 0;
-      const bv = (b as unknown as Record<string, number>)[sort] ?? 0;
+      const av = (a as unknown as Record<string, number>)[sortField] ?? 0;
+      const bv = (b as unknown as Record<string, number>)[sortField] ?? 0;
       return (av - bv) * order;
     });
     return res.json({
@@ -1707,7 +1709,7 @@ app.get('/v1/degenclaw/leaderboard', async (req, res) => {
       })),
       meta: {
         total: all.length, returned: Math.min(limit, all.length),
-        sort, order: order === 1 ? 'asc' : 'desc',
+        sort: sortField, order: order === 1 ? 'asc' : 'desc',
         dataSource: 'degenclaw-leaderboard-v1',
         scoredAt: new Date().toISOString(),
         disclaimer: 'VIGIL Trust Score is informational only — not investment advice.',
@@ -2027,7 +2029,7 @@ app.get('/polymarket/compare', async (req, res) => {
       </div>
     </body></html>`);
   } catch (err) {
-    res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${(err as Error).message}</body></html>`);
+    res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
   }
 });
 
@@ -2294,12 +2296,20 @@ code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 // Trigger a snapshot write. Protected by SNAPSHOT_KEY env var so
 // only the scheduled task / cron can hit it.
 app.post('/v1/internal/snapshot', async (req, res) => {
-  const providedKey = String(req.headers['x-snapshot-key'] || req.query.key || '').trim();
+  const providedKey = String(req.headers['x-snapshot-key'] || '').trim();
   const expectedKey = (process.env.SNAPSHOT_KEY || '').trim();
   if (!expectedKey) {
     return res.status(503).json({ error: 'SNAPSHOT_KEY_NOT_CONFIGURED', message: 'Server has no SNAPSHOT_KEY set — cannot accept snapshot writes.' });
   }
-  if (providedKey !== expectedKey) {
+  // Use timing-safe comparison to prevent timing attacks
+  let keysMatch = false;
+  try {
+    keysMatch = timingSafeEqual(Buffer.from(providedKey), Buffer.from(expectedKey));
+  } catch {
+    // Buffer lengths don't match, keys are definitely not equal
+    keysMatch = false;
+  }
+  if (!keysMatch) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
   try {
@@ -2559,6 +2569,8 @@ app.get('/v1/api/keys/usage', (req, res) => {
 
 const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TG_API_BASE = TG_BOT_TOKEN ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : '';
+// Derive webhook secret from bot token for verification
+const VIGIL_TG_WEBHOOK_SECRET = TG_BOT_TOKEN ? `vigil_tg_${TG_BOT_TOKEN.slice(-16)}` : '';
 
 async function tgSend(chatId: number, text: string) {
   if (!TG_API_BASE) return;
@@ -2580,6 +2592,13 @@ function tgPnl(pnl: number): string {
 app.post('/telegram/webhook', async (req, res) => {
   res.sendStatus(200); // ack immediately
   if (!TG_BOT_TOKEN) return;
+
+  // Verify webhook secret token to prevent unauthorized webhook calls
+  const providedSecret = String(req.headers['x-telegram-bot-api-secret-token'] || '');
+  if (!providedSecret || providedSecret !== VIGIL_TG_WEBHOOK_SECRET) {
+    console.warn('[TG Bot] Webhook called without valid secret token');
+    return;
+  }
 
   const msg = req.body?.message;
   if (!msg?.text) return;
@@ -2642,7 +2661,7 @@ app.get('/telegram/setup', async (req, res) => {
   const result = await fetch(`${TG_API_BASE}/setWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: webhookUrl }),
+    body: JSON.stringify({ url: webhookUrl, secret_token: VIGIL_TG_WEBHOOK_SECRET }),
   }).then(r => r.json());
   res.json({ webhookUrl, result });
 });
