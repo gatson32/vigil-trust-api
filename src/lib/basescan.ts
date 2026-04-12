@@ -12,7 +12,7 @@
 import { TTLCache } from './cache.js';
 
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
-const USER_AGENT = 'VIGIL-Trust/1.11.0';
+const USER_AGENT = 'VIGIL-Trust/1.17.0';
 
 // Supported chains
 export const CHAINS = {
@@ -85,6 +85,13 @@ export interface WalletProvenance {
   protocolsUsed: string[];      // human-readable names
   uniqueContractsInteracted: number;
   contractInteractions: number;
+
+  // v1.17.0: Advanced behavioral signals
+  botScore: number;                 // 0-100: likelihood of automated trading (higher = more bot-like)
+  washTradingScore: number;         // 0-100: likelihood of wash trading (higher = more suspicious)
+  topCounterpartyConcentration: number; // % of txs with single counterparty
+  medianTxIntervalSec: number;      // median seconds between consecutive txs
+  burstTxCount: number;             // txs within 5-second windows (bot signal)
 
   // VIGIL risk signals
   provenanceScore: number;      // 0-100 composite
@@ -309,6 +316,11 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
         protocolsUsed: [],
         uniqueContractsInteracted: 0,
         contractInteractions: 0,
+        botScore: 0,
+        washTradingScore: 0,
+        topCounterpartyConcentration: 0,
+        medianTxIntervalSec: 0,
+        burstTxCount: 0,
         provenanceScore: 0,
         provenanceGrade: 'F',
         flags: [`No on-chain history on ${chainName} chain`, 'Wallet may operate on a different chain'],
@@ -388,6 +400,62 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
         usdcIn += amount;
       } else {
         usdcOut += amount;
+      }
+    }
+
+    // --- v1.17.0: BOT DETECTION (Transaction Timing Analysis) ---
+    // Bots trade in tight bursts with consistent timing. Humans don't.
+    const allTimestamps = successTxs.map(t => Number(t.timeStamp)).filter(t => t > 0).sort((a, b) => a - b);
+    let medianTxIntervalSec = 0;
+    let burstTxCount = 0;
+    let botScore = 0;
+
+    if (allTimestamps.length >= 3) {
+      // Compute intervals between consecutive transactions
+      const intervals: number[] = [];
+      for (let i = 1; i < allTimestamps.length; i++) {
+        intervals.push(allTimestamps[i] - allTimestamps[i - 1]);
+      }
+      intervals.sort((a, b) => a - b);
+      medianTxIntervalSec = intervals[Math.floor(intervals.length / 2)];
+
+      // Count burst transactions (within 5-second windows)
+      for (let i = 1; i < allTimestamps.length; i++) {
+        if (allTimestamps[i] - allTimestamps[i - 1] <= 5) burstTxCount++;
+      }
+
+      // Bot score: high burst ratio + low median interval = bot-like
+      const burstRatio = allTimestamps.length > 1 ? burstTxCount / (allTimestamps.length - 1) : 0;
+      // Median interval < 30 seconds is suspicious, < 10 is very bot-like
+      const intervalScore = medianTxIntervalSec < 10 ? 50 : medianTxIntervalSec < 30 ? 30 : medianTxIntervalSec < 60 ? 15 : 0;
+      const burstScore = burstRatio > 0.5 ? 50 : burstRatio > 0.2 ? 30 : burstRatio > 0.05 ? 10 : 0;
+      botScore = Math.min(100, intervalScore + burstScore);
+    }
+
+    // --- v1.17.0: WASH TRADING DETECTION (Counterparty Concentration) ---
+    // If most transactions go to/from one address, it's likely self-dealing.
+    let topCounterpartyConcentration = 0;
+    let washTradingScore = 0;
+
+    if (counterparties.size > 0) {
+      const cpCounts: Record<string, number> = {};
+      for (const tx of successTxs) {
+        const from = tx.from.toLowerCase();
+        const to = (tx.to || '').toLowerCase();
+        if (from === walletLower && to) cpCounts[to] = (cpCounts[to] || 0) + 1;
+        if (to === walletLower) cpCounts[from] = (cpCounts[from] || 0) + 1;
+      }
+      const maxCpCount = Math.max(...Object.values(cpCounts));
+      const totalInteractions = Object.values(cpCounts).reduce((s, v) => s + v, 0);
+      topCounterpartyConcentration = totalInteractions > 0 ? maxCpCount / totalInteractions : 0;
+
+      // High concentration + few counterparties = wash trading signal
+      if (topCounterpartyConcentration > 0.7 && counterparties.size < 5) {
+        washTradingScore = 80;
+      } else if (topCounterpartyConcentration > 0.5 && counterparties.size < 10) {
+        washTradingScore = 50;
+      } else if (topCounterpartyConcentration > 0.3) {
+        washTradingScore = 20;
       }
     }
 
@@ -482,6 +550,15 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
     if (usdcIn > 0 && usdcOut === 0) flags.push('USDC only flows in, never out');
     if (contractCalls === 0 && txCount > 10) flags.push('No contract interactions despite activity — possible EOA-only transfers');
 
+    // v1.17.0: Bot and wash trading flags
+    if (botScore >= 60) flags.push(`Bot-like behavior detected: ${burstTxCount} burst txs, median interval ${medianTxIntervalSec}s`);
+    else if (botScore >= 30) flags.push(`Possible automated trading: ${burstTxCount} burst txs`);
+    if (botScore < 15 && txCount >= 20) greenFlags.push('Human-like transaction patterns');
+
+    if (washTradingScore >= 60) flags.push(`Wash trading signal: ${(topCounterpartyConcentration * 100).toFixed(0)}% of txs with single counterparty`);
+    else if (washTradingScore >= 30) flags.push(`Counterparty concentration: ${(topCounterpartyConcentration * 100).toFixed(0)}% with top address`);
+    if (washTradingScore < 20 && counterparties.size >= 10) greenFlags.push(`Diverse trading network: ${counterparties.size} counterparties`);
+
     const result: WalletProvenance = {
       wallet: walletLower,
       chainId,
@@ -501,6 +578,11 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
       protocolsUsed,
       uniqueContractsInteracted: contractsUsed.size,
       contractInteractions: contractCalls,
+      botScore,
+      washTradingScore,
+      topCounterpartyConcentration: Math.round(topCounterpartyConcentration * 100) / 100,
+      medianTxIntervalSec,
+      burstTxCount,
       provenanceScore: score,
       provenanceGrade,
       flags,

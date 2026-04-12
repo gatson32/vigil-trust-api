@@ -8,7 +8,7 @@
 
 import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
 
-const USER_AGENT = 'VIGIL-Trust/1.16.0 (vigil.trust; prediction-market-scoring)';
+const USER_AGENT = 'VIGIL-Trust/1.17.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
 
 // ============================================================
@@ -825,13 +825,18 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   const winRate = resolvedBets.length > 0 ? wins / resolvedBets.length : 0;
 
   // --- DIMENSION 1: CALIBRATION (30%) ---
-  // Inverse of calibration error. Perfect = 100, worst = 0.
+  // v1.17.0: Combine calibration error (60%) with resolution (40%)
+  // Resolution rewards wallets that make genuine forecasts diverging from base rate.
+  // A wallet with perfect calibration but no resolution is just predicting the average.
   let calibrationDim: number;
   if (resolvedBets.length < 5) {
     calibrationDim = 0; // can't assess calibration on thin data
   } else {
     // calibrationError ranges 0 (perfect) to ~0.5 (worst)
-    calibrationDim = Math.max(0, Math.min(100, (1 - calibrationReport.calibrationError * 2.5) * 100));
+    const calScore = Math.max(0, Math.min(100, (1 - calibrationReport.calibrationError * 2.5) * 100));
+    // Resolution ranges 0 (no discrimination) to ~0.25 (strong). Map to 0-100.
+    const resScore = Math.max(0, Math.min(100, calibrationReport.brierDecomposition.resolution * 400));
+    calibrationDim = calScore * 0.6 + resScore * 0.4;
   }
 
   // --- DIMENSION 2: PROFITABILITY (20%) ---
@@ -927,34 +932,48 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   // If 80%+ of resolved bets are sub-$0.10, this is a lottery strategy,
   // not predictive skill. Low-price bets that hit 1-2 times inflate PnL
   // while appearing "well-calibrated" because expected = 5%, actual = 0.4%.
+  // v1.17.0 FIX: Skip penalty if BSS > 0 — if the strategy actually beats
+  // naive baseline, the penny bets are working, not farming.
   const pennyBets = resolvedBets.filter(b => b.impliedProb < 0.10).length;
   const pennyRatio = resolvedBets.length > 0 ? pennyBets / resolvedBets.length : 0;
   let pennyPenalty = 0;
-  if (pennyRatio >= 0.8 && resolvedBets.length >= 10) {
-    pennyPenalty = 40; // massive penalty — this is lottery farming, not skill
-  } else if (pennyRatio >= 0.5 && resolvedBets.length >= 10) {
-    pennyPenalty = 20; // significant penalty — heavily skewed toward penny bets
+  const bssPositive = calibrationReport.brierSkillScore > 0;
+  if (!bssPositive) {
+    if (pennyRatio >= 0.8 && resolvedBets.length >= 10) {
+      pennyPenalty = 30; // heavy penalty — lottery farming with no skill (reduced from 40)
+    } else if (pennyRatio >= 0.5 && resolvedBets.length >= 10) {
+      pennyPenalty = 15; // moderate penalty — heavily skewed toward penny bets (reduced from 20)
+    }
   }
 
   // --- PENALTY 2: RECEIVE-ONLY WALLET ---
   // A wallet that has never sent a transaction is likely a proxy/settlement
-  // address, not a real trader. Penalize heavily.
+  // address, not a real trader. Flag it but don't crush the score — many
+  // legitimate Polymarket wallets are proxy/settlement addresses that only
+  // receive funds from a parent wallet.
+  // v1.17.0 FIX: Reduced from 15pts to 5pts. Proxy wallets are common in
+  // Polymarket's architecture and shouldn't be penalized as heavily.
   let receiveOnlyPenalty = 0;
   if (provenance && provenance.outboundTxCount === 0 && provenance.inboundTxCount > 0) {
-    receiveOnlyPenalty = 15; // cap reduction — can't fully trust a one-way wallet
+    receiveOnlyPenalty = 5; // light flag — note it but don't crush
   }
 
   // --- PENALTY 3: PnL DIVERGENCE ---
   // If API-reported PnL diverges massively from on-chain USDC flows,
   // either the data is unreliable or something is being misrepresented.
+  // v1.17.0 FIX: Subtract unrealized gains before comparing — open positions
+  // naturally create divergence between API PnL (includes unrealized) and
+  // on-chain USDC flows (only settled). Only flag truly anomalous gaps.
   let pnlDivPenalty = 0;
   if (provenance && provenance.usdcTransfers > 0) {
     const onChainNetUsdc = provenance.totalUsdcIn - provenance.totalUsdcOut;
-    const divergence = Math.abs(totalPnl - onChainNetUsdc);
+    // Compare against REALIZED PnL only, not total (which includes unrealized)
+    const comparablePnl = realizedPnl;
+    const divergence = Math.abs(comparablePnl - onChainNetUsdc);
     if (divergence > totalVolume * 0.5 && totalVolume > 0) {
-      pnlDivPenalty = 25; // massive divergence — data can't be trusted
+      pnlDivPenalty = 15; // massive divergence — data can't be trusted (reduced from 25)
     } else if (divergence > totalVolume * 0.2 && totalVolume > 0) {
-      pnlDivPenalty = 10; // moderate divergence — flag it
+      pnlDivPenalty = 5; // moderate divergence — flag it (reduced from 10)
     }
   }
 
@@ -968,29 +987,33 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     liveEdgeDim * WEIGHTS.liveEdge
   );
 
-  // Apply penalties
+  // Sum penalties (applied after gating to prevent double-punishment)
   const totalPenalty = pennyPenalty + receiveOnlyPenalty + pnlDivPenalty;
-  const trustScore = Math.max(0, rawTrustScore - totalPenalty);
 
   // Sample-size gate — considers resolved bets, open positions, AND trade activity
+  // v1.17.0 FIX: Gates only apply to the RAW score (pre-penalty) to prevent
+  // double-punishment. Penalties are then applied AFTER gating.
   const totalDataPoints = resolvedBets.length + positions.length;
   const hasProvenActivity = trades.length >= 100 && uniqueMarkets >= 20;
-  let gatedScore: number;
+  let gatedRaw: number;
   if (resolvedBets.length >= 10) {
-    gatedScore = trustScore; // enough resolved data, no gate
+    gatedRaw = rawTrustScore; // enough resolved data, no gate
   } else if (resolvedBets.length >= 5) {
-    gatedScore = Math.min(trustScore, 60);
+    gatedRaw = Math.min(rawTrustScore, 65);
   } else if (hasProvenActivity) {
     // Few resolved bets but massive trade history — the wallet is real,
     // positions just got purged from the API. Cap at C+ range.
-    gatedScore = Math.min(trustScore, 65);
+    gatedRaw = Math.min(rawTrustScore, 70);
   } else if (totalDataPoints >= 20) {
-    gatedScore = Math.min(trustScore, 55);
+    gatedRaw = Math.min(rawTrustScore, 60);
   } else if (totalDataPoints >= 5) {
-    gatedScore = Math.min(trustScore, 40);
+    gatedRaw = Math.min(rawTrustScore, 45);
   } else {
-    gatedScore = Math.min(trustScore, 25); // almost no data at all
+    gatedRaw = Math.min(rawTrustScore, 30); // almost no data at all
   }
+
+  // Apply penalties AFTER gating (prevents double-punishment)
+  let gatedScore = Math.max(0, gatedRaw - totalPenalty);
 
   // Hard cap: penny-lottery + receive-only wallets cannot exceed C grade
   if (pennyRatio >= 0.8 && receiveOnlyPenalty > 0) {
@@ -1076,8 +1099,15 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
       flags.push(`PnL divergence: $${Math.round(pnlDivergence)} gap between API and on-chain USDC flows`);
     }
 
+    // v1.17.0: Bot and wash trading signals from enhanced Basescan analysis
+    if (provenance.botScore >= 60) flags.push(`On-chain: bot-like trading patterns detected (bot score: ${provenance.botScore})`);
+    else if (provenance.botScore >= 30) flags.push(`On-chain: possible automated trading (bot score: ${provenance.botScore})`);
+    if (provenance.washTradingScore >= 60) flags.push(`On-chain: wash trading signal — ${(provenance.topCounterpartyConcentration * 100).toFixed(0)}% of txs with single counterparty`);
+    if (provenance.botScore < 15 && provenance.totalTransactions >= 20) greenFlags.push(`On-chain: human-like trading patterns`);
+    if (provenance.washTradingScore < 20 && provenance.uniqueCounterparties >= 10) greenFlags.push(`On-chain: diverse counterparty network`);
+
     reasoning.push(
-      `On-chain verification: wallet age ${provenance.walletAgeDays} days, ${provenance.totalTransactions} txs, provenance grade ${provenance.provenanceGrade}.`,
+      `On-chain verification: wallet age ${provenance.walletAgeDays} days, ${provenance.totalTransactions} txs, provenance grade ${provenance.provenanceGrade}. Bot score: ${provenance.botScore}/100, wash trading score: ${provenance.washTradingScore}/100.`,
     );
   }
 
