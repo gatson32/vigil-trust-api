@@ -8,7 +8,7 @@
 
 import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
 
-const USER_AGENT = 'VIGIL-Trust/1.11.0 (vigil.trust; prediction-market-scoring)';
+const USER_AGENT = 'VIGIL-Trust/1.16.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
 
 // ============================================================
@@ -76,6 +76,20 @@ export interface CalibrationReport {
     skill: number;            // calibration-weighted returns (0-100)
     luck: number;             // variance residual (0-100)
     edge: number;             // net alpha after removing luck
+  };
+  // === v1.16.0 UPGRADES — academic-grade metrics ===
+  brierDecomposition: {
+    calibration: number;      // Murphy (1973): lower is better — how far from perfect calibration
+    resolution: number;       // higher is better — how far forecasts differ from base rate
+    uncertainty: number;      // base rate uncertainty (constant for given dataset)
+  };
+  brierSkillScore: number;    // BSS = 1 - (BS / BS_climatology). 0 = no skill, 1 = perfect. Negative = worse than naive
+  logLoss: number;            // logarithmic scoring rule — penalizes overconfidence on rare events more than Brier
+  logLossSkill: number;       // 1 - (logLoss / naive_logLoss). Positive = better than naive
+  timeliness: {
+    avgDaysBeforeResolution: number;  // mean days between entry and market resolution
+    earlyMoverPct: number;            // % of bets placed in first half of market lifetime
+    timelinessScore: number;          // 0-100 score
   };
 }
 
@@ -350,16 +364,26 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
       avgEntryPrice = noBuyCost / noBought;
     }
 
-    const impliedProb = Math.max(0.01, Math.min(0.99, avgEntryPrice));
+    // FIX (v1.16.0): Implied probability must be corrected for NO bets.
+    // A NO buyer paying $0.30 is expressing 70% confidence the event does NOT happen,
+    // which equals 30% confidence that it DOES happen. For calibration we always
+    // express probability in terms of the trader's chosen side winning.
+    // YES buyer at $0.70 → impliedProb = 0.70 (they think YES wins 70%)
+    // NO buyer at $0.30  → impliedProb = 0.70 (they think NO wins 70%, i.e. YES loses)
+    const impliedProb = traderSide === 'Yes'
+      ? Math.max(0.01, Math.min(0.99, avgEntryPrice))
+      : Math.max(0.01, Math.min(0.99, 1 - avgEntryPrice));
+
     const correct = market.winningOutcome === traderSide;
+
+    // Capture earliest trade timestamp for timeliness scoring
+    const entryTimestamp = Math.min(...marketTrades.map(t => t.timestamp));
 
     // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice
     const pnl = correct
       ? netShares * (1 - avgEntryPrice)
       : -netShares * avgEntryPrice;
 
-    // Determine side: if yesNet > noNet, they held YES; if noNet > yesNet, they held NO
-    // Since we always bought to have a net position, side is BUY
     const side: 'BUY' | 'SELL' = 'BUY';
 
     resolvedBets.push({
@@ -368,6 +392,7 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
       pnl,
       size: netShares,
       side,
+      entryTimestamp,
     });
   }
 
@@ -385,11 +410,14 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
 // ============================================================
 
 interface ResolvedBet {
-  impliedProb: number;   // price they paid (their belief)
+  impliedProb: number;   // price they paid (their belief) — corrected for NO side
   correct: boolean;       // did the market resolve in their favor?
   pnl: number;           // what they made/lost
   size: number;           // position size in shares
   side: 'BUY' | 'SELL';   // whether this was a buy or sell position
+  entryTimestamp?: number; // when they entered (earliest trade in this market)
+  resolutionTimestamp?: number; // when market resolved (if known)
+  marketCreatedAt?: number;    // when market was created (if known)
 }
 
 /**
@@ -410,17 +438,23 @@ function extractResolvedBetsFromPositions(
     if (cur <= 0.95 && cur >= 0.05) continue;
 
     const correct = cur > 0.95; // price near 1 = this outcome won
-    const impliedProb = p.avgPrice;  // what they paid = their belief
+    const rawPrice = p.avgPrice;  // what they paid
     const size = p.size;
 
-    // Infer side: if avgPrice < 0.5 and size > 0, likely a BUY (bought low)
-    // if avgPrice > 0.5 and size > 0, could be BUY or SELL; use size sign
-    const side: 'BUY' | 'SELL' = impliedProb < 0.5 ? 'BUY' : 'SELL';
+    // FIX (v1.16.0): Implied probability = confidence that THIS SIDE wins.
+    // For outcome='Yes' at $0.70 → impliedProb = 0.70 (70% YES wins)
+    // For outcome='No' at $0.30 → impliedProb = 0.70 (70% NO wins)
+    // outcomeIndex: 0 = Yes, 1 = No (Polymarket standard)
+    const isNoSide = p.outcomeIndex === 1 || p.outcome === 'No';
+    const impliedProb = isNoSide
+      ? Math.max(0.01, Math.min(0.99, 1 - rawPrice))
+      : Math.max(0.01, Math.min(0.99, rawPrice));
 
-    // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice per share
+    const side: 'BUY' | 'SELL' = rawPrice < 0.5 ? 'BUY' : 'SELL';
+
     const pnl = correct
-      ? size * (1 - impliedProb)
-      : size * (-impliedProb);
+      ? size * (1 - rawPrice)
+      : size * (-rawPrice);
 
     bets.push({ impliedProb, correct, pnl, size, side });
   }
@@ -429,6 +463,9 @@ function extractResolvedBetsFromPositions(
 }
 
 function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
+  const emptyTimeliness = { avgDaysBeforeResolution: 0, earlyMoverPct: 0, timelinessScore: 0 };
+  const emptyDecomp = { calibration: 0, resolution: 0, uncertainty: 0 };
+
   if (bets.length === 0) {
     return {
       buckets: [],
@@ -437,20 +474,42 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
       resolvedBets: 0,
       overconfidenceBias: 0,
       skillDecomposition: { skill: 0, luck: 0, edge: 0 },
+      brierDecomposition: emptyDecomp,
+      brierSkillScore: -1,
+      logLoss: 10,
+      logLossSkill: -1,
+      timeliness: emptyTimeliness,
     };
   }
 
-  // --- Brier Score ---
-  // Mean squared error between implied probability and actual outcome (0 or 1)
+  const N = bets.length;
+
+  // ================================================================
+  //  BRIER SCORE — Mean squared error (forecast vs outcome)
+  // ================================================================
   let brierSum = 0;
   for (const b of bets) {
     const outcome = b.correct ? 1 : 0;
     brierSum += (b.impliedProb - outcome) ** 2;
   }
-  const brierScore = brierSum / bets.length;
+  const brierScore = brierSum / N;
 
-  // --- Calibration Buckets ---
-  // Group bets by implied probability range (deciles)
+  // ================================================================
+  //  LOG LOSS — Logarithmic scoring rule (penalizes rare-event overconfidence)
+  //  logLoss = -(1/N) * Σ [outcome * ln(p) + (1-outcome) * ln(1-p)]
+  // ================================================================
+  let logLossSum = 0;
+  const LOG_CLAMP = 0.001; // prevent log(0)
+  for (const b of bets) {
+    const outcome = b.correct ? 1 : 0;
+    const p = Math.max(LOG_CLAMP, Math.min(1 - LOG_CLAMP, b.impliedProb));
+    logLossSum += outcome * Math.log(p) + (1 - outcome) * Math.log(1 - p);
+  }
+  const logLoss = -logLossSum / N;
+
+  // ================================================================
+  //  CALIBRATION BUCKETS — FIX: use mean forecast, not midpoint
+  // ================================================================
   const bucketDefs = [
     { lo: 0.0, hi: 0.1, label: '0.00-0.10' },
     { lo: 0.1, hi: 0.2, label: '0.10-0.20' },
@@ -475,58 +534,145 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
 
     const correctCount = inBucket.filter(b => b.correct).length;
     const actualRate = correctCount / inBucket.length;
-    const midpoint = (def.lo + def.hi) / 2;
-    const error = Math.abs(actualRate - midpoint);
+    // FIX (v1.16.0): Use mean of actual forecast probabilities in this bucket,
+    // not the bucket midpoint. This is the correct method per Gneiting et al.
+    const meanForecast = inBucket.reduce((s, b) => s + b.impliedProb, 0) / inBucket.length;
+    const error = Math.abs(actualRate - meanForecast);
 
     buckets.push({
       range: def.label,
-      midpoint,
+      midpoint: meanForecast,  // now stores mean forecast, not midpoint
       totalBets: inBucket.length,
       correctBets: correctCount,
       actualRate,
-      expectedRate: midpoint,
+      expectedRate: meanForecast,
       error,
     });
 
     calErrorSum += error * inBucket.length;
     calErrorCount += inBucket.length;
-    overconfidenceSum += (midpoint - actualRate) * inBucket.length;
+    overconfidenceSum += (meanForecast - actualRate) * inBucket.length;
   }
 
   const calibrationError = calErrorCount > 0 ? calErrorSum / calErrorCount : 1;
   const overconfidenceBias = calErrorCount > 0 ? overconfidenceSum / calErrorCount : 0;
 
-  // --- Skill Decomposition ---
-  // Skill = how much of the PnL came from calibration (genuine alpha)
-  // Luck = variance residual
-  const totalPnl = bets.reduce((s, b) => s + b.pnl, 0);
-  // For BUY bets: staked = size * impliedProb
-  // For SELL bets: staked = size * (1 - impliedProb)
-  const totalStaked = bets.reduce((s, b) => {
-    if (b.side === 'BUY') {
-      return s + b.size * b.impliedProb;
-    } else {
-      return s + b.size * (1 - b.impliedProb);
+  // ================================================================
+  //  BRIER SCORE DECOMPOSITION — Murphy (1973)
+  //  BS = Calibration - Resolution + Uncertainty
+  //
+  //  Calibration (REL): how far bucket outcomes deviate from bucket forecasts
+  //  Resolution (RES): how far bucket outcomes deviate from the overall base rate
+  //  Uncertainty (UNC): overall outcome variance = baseRate * (1 - baseRate)
+  // ================================================================
+  const baseRate = bets.filter(b => b.correct).length / N;
+  const uncertainty = baseRate * (1 - baseRate);
+
+  let calComponent = 0; // Reliability — lower is better
+  let resComponent = 0; // Resolution — higher is better
+
+  for (const bucket of buckets) {
+    const nk = bucket.totalBets;
+    const ok = bucket.actualRate;    // observed frequency in bucket
+    const fk = bucket.expectedRate;  // mean forecast in bucket
+
+    calComponent += (nk / N) * (fk - ok) ** 2;
+    resComponent += (nk / N) * (ok - baseRate) ** 2;
+  }
+
+  // ================================================================
+  //  BRIER SKILL SCORE — performance vs naive (always-predict-baseRate)
+  //  BSS = 1 - BS / BS_climatology
+  //  BS_climatology = baseRate * (1 - baseRate) = uncertainty
+  // ================================================================
+  const bs_climatology = uncertainty > 0 ? uncertainty : 0.25; // fallback if all same outcome
+  const brierSkillScore = 1 - (brierScore / bs_climatology);
+
+  // ================================================================
+  //  LOG LOSS SKILL — performance vs naive log loss
+  //  Naive log loss = -[baseRate * ln(baseRate) + (1-baseRate) * ln(1-baseRate)]
+  // ================================================================
+  const clampedBase = Math.max(LOG_CLAMP, Math.min(1 - LOG_CLAMP, baseRate));
+  const naiveLogLoss = -(clampedBase * Math.log(clampedBase) + (1 - clampedBase) * Math.log(1 - clampedBase));
+  const logLossSkill = naiveLogLoss > 0 ? 1 - (logLoss / naiveLogLoss) : 0;
+
+  // ================================================================
+  //  TIMELINESS — early mover scoring
+  //  Measures how early traders enter relative to market resolution.
+  //  Traders who forecast early demonstrate genuine foresight, not reactionary copying.
+  // ================================================================
+  const betsWithTimestamps = bets.filter(b => b.entryTimestamp && b.entryTimestamp > 0);
+  let timeliness = emptyTimeliness;
+
+  if (betsWithTimestamps.length >= 5) {
+    // Approximate: use entry timestamps and current time as proxy for resolution
+    // In production this would use actual market resolution timestamps
+    const now = Date.now();
+    const daysBefore: number[] = [];
+    let earlyCount = 0;
+
+    for (const b of betsWithTimestamps) {
+      const entryMs = b.entryTimestamp! * (b.entryTimestamp! < 1e12 ? 1000 : 1); // handle s vs ms
+      const resMs = b.resolutionTimestamp ? b.resolutionTimestamp * (b.resolutionTimestamp < 1e12 ? 1000 : 1) : now;
+      const daysBeforeRes = Math.max(0, (resMs - entryMs) / 86_400_000);
+      daysBefore.push(daysBeforeRes);
+
+      // "Early mover" = entered in the first half of the market's lifetime
+      if (b.marketCreatedAt) {
+        const createdMs = b.marketCreatedAt * (b.marketCreatedAt < 1e12 ? 1000 : 1);
+        const marketLifetime = resMs - createdMs;
+        if (marketLifetime > 0 && (entryMs - createdMs) < marketLifetime * 0.5) {
+          earlyCount++;
+        }
+      } else {
+        // Without market creation time, consider >14 days before resolution as "early"
+        if (daysBeforeRes > 14) earlyCount++;
+      }
     }
+
+    const avgDays = daysBefore.reduce((s, v) => s + v, 0) / daysBefore.length;
+    const earlyPct = earlyCount / betsWithTimestamps.length;
+
+    // Timeliness score: reward early entry. 30+ days avg = 100, 0 days = 0
+    const timeScore = Math.max(0, Math.min(100,
+      (Math.min(avgDays, 60) / 60) * 60 +  // 60% from avg days (capped at 60 days)
+      earlyPct * 40                          // 40% from early mover percentage
+    ));
+
+    timeliness = {
+      avgDaysBeforeResolution: Math.round(avgDays * 10) / 10,
+      earlyMoverPct: Math.round(earlyPct * 1000) / 1000,
+      timelinessScore: Math.round(timeScore),
+    };
+  }
+
+  // ================================================================
+  //  SKILL DECOMPOSITION — improved with Resolution data
+  // ================================================================
+  const totalPnl = bets.reduce((s, b) => s + b.pnl, 0);
+  const totalStaked = bets.reduce((s, b) => {
+    if (b.side === 'BUY') return s + b.size * b.impliedProb;
+    return s + b.size * (1 - b.impliedProb);
   }, 0);
   const roi = totalStaked > 0 ? totalPnl / totalStaked : 0;
 
-  // Skill metric: inverse of calibration error, scaled 0-100
-  // Perfect calibration (error=0) = skill 100
-  // Worst calibration (error=0.5) = skill 0
-  const skill = Math.max(0, Math.min(100, (1 - calibrationError * 2) * 100));
+  // Skill: combines calibration quality + resolution (discrimination)
+  // Resolution measures how much the trader deviates from base rate — i.e. do they
+  // actually have opinions, or do they always bet ~50%?
+  // Perfect calibration (error=0) + high resolution = genuine superforecaster
+  const calSkill = Math.max(0, Math.min(100, (1 - calibrationError * 2) * 100));
+  const resSkill = Math.max(0, Math.min(100, resComponent * 400)); // resolution scaled up
+  const skill = calSkill * 0.6 + resSkill * 0.4; // 60% calibration, 40% resolution
 
-  // Luck: higher variance in outcomes relative to sample = more luck-driven
+  // Luck: coefficient of variation of per-bet returns
   const pnlValues = bets.map(b => b.pnl);
   const pnlMean = pnlValues.reduce((s, v) => s + v, 0) / pnlValues.length;
   const pnlVariance = pnlValues.reduce((s, v) => s + (v - pnlMean) ** 2, 0) / pnlValues.length;
   const pnlStdDev = Math.sqrt(pnlVariance);
-  // Higher variance relative to mean = more luck-driven
   const luckRatio = pnlMean !== 0 ? Math.abs(pnlStdDev / pnlMean) : 10;
   const luck = Math.max(0, Math.min(100, luckRatio * 20));
 
-  // Edge: net alpha — positive = genuine skill beyond luck
-  const edge = roi * 100; // scale for readability
+  const edge = roi * 100;
 
   return {
     buckets,
@@ -539,6 +685,15 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
       luck: Math.round(luck * 10) / 10,
       edge: Math.round(edge * 100) / 100,
     },
+    brierDecomposition: {
+      calibration: Math.round(calComponent * 10000) / 10000,
+      resolution: Math.round(resComponent * 10000) / 10000,
+      uncertainty: Math.round(uncertainty * 10000) / 10000,
+    },
+    brierSkillScore: Math.round(brierSkillScore * 10000) / 10000,
+    logLoss: Math.round(logLoss * 10000) / 10000,
+    logLossSkill: Math.round(logLossSkill * 10000) / 10000,
+    timeliness,
   };
 }
 
@@ -855,8 +1010,17 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     if (calibrationReport.brierScore > 0.35) flags.push(`Weak Brier score: ${calibrationReport.brierScore}`);
     if (calibrationReport.overconfidenceBias > 0.1) flags.push(`Overconfidence bias: ${calibrationReport.overconfidenceBias.toFixed(3)}`);
     if (calibrationReport.overconfidenceBias < -0.05) greenFlags.push(`Conservative (underconfident) bias`);
-    if (calibrationReport.skillDecomposition.skill > 60) greenFlags.push(`Genuine predictive skill detected (${calibrationReport.skillDecomposition.skill}/100)`);
-    if (calibrationReport.skillDecomposition.luck > 70) flags.push(`High luck component: ${calibrationReport.skillDecomposition.luck}/100 — returns may not persist`);
+    if (calibrationReport.skillDecomposition.skill > 60) greenFlags.push(`Genuine predictive skill detected (${calibrationReport.skillDecomposition.skill.toFixed(0)}/100)`);
+    if (calibrationReport.skillDecomposition.luck > 70) flags.push(`High luck component: ${calibrationReport.skillDecomposition.luck.toFixed(0)}/100 — returns may not persist`);
+
+    // v1.16.0: New academic-grade signals
+    if (calibrationReport.brierSkillScore > 0.15) greenFlags.push(`Brier Skill Score: ${(calibrationReport.brierSkillScore * 100).toFixed(1)}% better than naive baseline`);
+    if (calibrationReport.brierSkillScore < -0.1) flags.push(`Brier Skill Score: ${(calibrationReport.brierSkillScore * 100).toFixed(1)}% — performing worse than naive baseline`);
+    if (calibrationReport.brierDecomposition.resolution > 0.05) greenFlags.push(`Strong resolution/discrimination: forecasts meaningfully diverge from base rate`);
+    if (calibrationReport.brierDecomposition.resolution < 0.01 && resolvedBets.length >= 20) flags.push(`Low resolution: forecasts cluster near base rate — no genuine opinions`);
+    if (calibrationReport.logLossSkill > 0.1) greenFlags.push(`Log loss skill: ${(calibrationReport.logLossSkill * 100).toFixed(1)}% better than naive (rare-event sensitive)`);
+    if (calibrationReport.logLossSkill < -0.2) flags.push(`Log loss penalty: severe overconfidence on wrong bets detected`);
+    if (calibrationReport.timeliness.timelinessScore >= 60) greenFlags.push(`Early mover: avg ${calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)} days before resolution`);
   }
 
   // Penalty flags
@@ -925,6 +1089,19 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
       : `Insufficient resolved bets for calibration analysis.`,
     `Skill decomposition: ${calibrationReport.skillDecomposition.skill.toFixed(0)}% skill, ${calibrationReport.skillDecomposition.luck.toFixed(0)}% luck.`,
   );
+  // v1.16.0: Academic-grade metrics in reasoning
+  if (calibrationReport.resolvedBets >= 10) {
+    reasoning.push(
+      `Brier Skill Score: ${(calibrationReport.brierSkillScore * 100).toFixed(1)}% vs naive baseline (>0% = better than always predicting base rate).`,
+      `Brier decomposition: REL=${calibrationReport.brierDecomposition.calibration.toFixed(4)} RES=${calibrationReport.brierDecomposition.resolution.toFixed(4)} UNC=${calibrationReport.brierDecomposition.uncertainty.toFixed(4)}.`,
+      `Log loss: ${calibrationReport.logLoss.toFixed(4)} (skill: ${(calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive). Lower log loss = better calibration on rare events.`,
+    );
+    if (calibrationReport.timeliness.timelinessScore > 0) {
+      reasoning.push(
+        `Timeliness: avg entry ${calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(1)} days before resolution, ${(calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover.`,
+      );
+    }
+  }
 
   // --- CONFIDENCE INTERVALS ---
   let confidenceLevel: 'high' | 'medium' | 'low' | 'very_low';

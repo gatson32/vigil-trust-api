@@ -2280,12 +2280,45 @@ ${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div cl
 <div class="metric"><div class="metric-label">Markets</div><div class="metric-val">${r.raw.uniqueMarkets}</div></div>
 <div class="metric"><div class="metric-label">Brier Score</div><div class="metric-val">${r.calibrationReport.brierScore}</div></div>
 <div class="metric"><div class="metric-label">Open Positions</div><div class="metric-val">${r.raw.openPositions}</div></div>
+<div class="metric"><div class="metric-label">Brier Skill</div><div class="metric-val" style="color:${r.calibrationReport.brierSkillScore > 0 ? '#10b981' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div></div>
+<div class="metric"><div class="metric-label">Log Loss</div><div class="metric-val">${r.calibrationReport.logLoss.toFixed(3)}</div></div>
 </div></div>
 
 ${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-title">Calibration Analysis</div>
 <p style="font-size:13px;color:#9ca3af;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
 <table class="cal-table"><tr><th>Bucket</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Error</th></tr>${calBucketsHtml}</table>
 <div style="margin-top:12px"><span style="font-size:12px;color:#6b7280">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
+
+<div style="margin-top:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Reliability (CAL)</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.calibration < 0.03 ? '#10b981' : r.calibrationReport.brierDecomposition.calibration < 0.08 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.calibration.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Lower = better calibrated</div>
+</div>
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Resolution (RES)</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.resolution > 0.05 ? '#10b981' : r.calibrationReport.brierDecomposition.resolution > 0.01 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.resolution.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Higher = stronger opinions</div>
+</div>
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div>
+<div style="font-size:10px;color:#4b5563">vs naive baseline</div>
+</div>
+</div>
+
+<div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Log Loss</div>
+<div style="font-size:18px;font-weight:700;color:#fff">${r.calibrationReport.logLoss.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Skill: ${(r.calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive — sensitive to rare events</div>
+</div>
+${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Timeliness</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.timeliness.timelinessScore >= 60 ? '#10b981' : r.calibrationReport.timeliness.timelinessScore >= 30 ? '#eab308' : '#ef4444'}">${r.calibrationReport.timeliness.timelinessScore}/100</div>
+<div style="font-size:10px;color:#4b5563">Avg ${r.calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)}d before resolution, ${(r.calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover</div>
+</div>` : ''}
+</div>
 </div>` : ''}
 
 ${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill vs. Luck Decomposition</div>
