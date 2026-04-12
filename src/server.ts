@@ -412,10 +412,10 @@ function formatAgentResponse(agent: ScoredAgent) {
 // --- Privacy Policy ---
 app.get('/privacy', (_req, res) => {
   res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL — Privacy Policy</title></head>
-<body style="background:#0a0e1a;color:#d1d5db;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px;line-height:1.8">
+<body style="background:#0c0c0c;color:#e8e8e8;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:40px 20px;line-height:1.8">
 <div style="max-width:700px;margin:0 auto">
 <h1 style="color:#fff;font-size:28px;margin-bottom:8px">VIGIL Privacy Policy</h1>
-<p style="color:#6b7280;font-size:13px">Last updated: April 12, 2026</p>
+<p style="color:#555;font-size:13px">Last updated: April 12, 2026</p>
 
 <h2 style="color:#fff;font-size:18px;margin-top:32px">What We Collect</h2>
 <p>VIGIL collects minimal data necessary to operate the service. We do not require user accounts or logins for basic scoring. Specifically:</p>
@@ -442,9 +442,9 @@ app.get('/privacy', (_req, res) => {
 <p>We do not sell, rent, or share any data with third parties. Trust scores are computed on our servers and returned directly to you.</p>
 
 <h2 style="color:#fff;font-size:18px;margin-top:32px">Contact</h2>
-<p>Questions about this policy: <a href="mailto:gatson32@gmail.com" style="color:#a78bfa">gatson32@gmail.com</a></p>
+<p>Questions about this policy: <a href="mailto:gatson32@gmail.com" style="color:#00d4aa">gatson32@gmail.com</a></p>
 
-<div style="margin-top:40px;padding-top:20px;border-top:1px solid #1f2937;font-size:12px;color:#4b5563">VIGIL — Built by Freedom United Works</div>
+<div style="margin-top:40px;padding-top:20px;border-top:1px solid #1e1e1e;font-size:12px;color:#444">VIGIL — Built by Freedom United Works</div>
 </div></body></html>`);
 });
 
@@ -1660,38 +1660,38 @@ function renderDegenClawScoreCard(r: DegenClawRiskReport): string {
 <meta property="og:title" content="VIGIL Risk Score: ${dcEscape(r.agentName)} — ${r.trustGrade} (${r.trustScore}/100)"/>
 <meta property="og:description" content="${dcEscape(dcTierBlurb(r.trustTier))}"/>
 <style>
-:root{--bg:#0b0d12;--card:#13161d;--ink:#e8ecf1;--muted:#8892a6;--line:#20242d;--accent:${color};}
+:root{--bg:#0c0c0c;--card:#141414;--ink:#e8e8e8;--muted:#707070;--line:#1e1e1e;--accent:${color};}
 *{box-sizing:border-box}body{margin:0;font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
 .wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px}
 .topbar{display:flex;align-items:center;gap:12px;margin-bottom:32px}
 .logo{font-weight:800;letter-spacing:0.02em;font-size:20px}
 .logo span{color:var(--muted);font-weight:500;font-size:14px;margin-left:8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 22px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:2px;padding:28px 28px 22px;margin-bottom:18px}
 .score-row{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .score-main h1{margin:0 0 4px;font-size:26px;font-weight:700}
 .score-main .sub{color:var(--muted);font-size:14px;margin-bottom:0}
 .grade{display:flex;flex-direction:column;align-items:center;min-width:120px}
 .grade-letter{font-size:72px;font-weight:800;line-height:1;color:var(--accent)}
 .grade-num{font-size:14px;color:var(--muted);margin-top:4px}
-.tier{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:0.04em;background:var(--accent);color:#0b0d12;margin-top:10px}
+.tier{display:inline-block;padding:4px 10px;border-radius:2px;font-size:12px;font-weight:700;letter-spacing:0.04em;background:var(--accent);color:#0c0c0c;margin-top:10px}
 .tier-blurb{color:var(--muted);font-size:14px;margin-top:10px}
 .section-title{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 12px;font-weight:600}
 .bar-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:14px}
 .bar-label{min-width:120px;color:var(--muted)}
-.bar-track{flex:1;height:8px;background:#1a1e26;border-radius:4px;overflow:hidden}
-.bar-fill{height:100%;border-radius:4px;transition:width .5s}
+.bar-track{flex:1;height:8px;background:#1a1a1a;border-radius:1px;overflow:hidden}
+.bar-fill{height:100%;border-radius:1px;transition:width .5s}
 .bar-val{min-width:32px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:6px}
-.stat{background:#0f1218;border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.stat{background:#0f0f0f;border:1px solid var(--line);border-radius:2px;padding:12px 14px}
 .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
 .stat-val{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
 .flag-list{padding:0;margin:8px 0 0;list-style:none;font-size:14px}
-.flag-list li{padding:6px 10px;border-radius:6px;margin-bottom:6px}
+.flag-list li{padding:6px 10px;border-radius:2px;margin-bottom:6px}
 .flag-list.red li{background:#2a1414;color:#fca5a5}
 .flag-list.green li{background:#102418;color:#86efac}
 .reasoning{color:var(--muted);font-size:14px;margin-top:10px}.reasoning p{margin:6px 0}
 .foot{font-size:12px;color:var(--muted);padding:16px 0 0;border-top:1px solid var(--line);margin-top:22px;line-height:1.5}
-a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
+a{color:#00d4aa;text-decoration:none}a:hover{text-decoration:underline}
 </style></head><body><div class="wrap">
 <div class="topbar"><div class="logo">VIGIL<span>Trust Score for the AI Agent Economy</span></div></div>
 <div class="card"><div class="score-row">
@@ -1721,18 +1721,18 @@ ${(r.greenFlags.length>0||r.flags.length>0)?`<div class="card"><h3 class="sectio
 }
 
 function renderDegenClawNotFound(query: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>Not found — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px}p{color:#8892a6}a{color:#60a5fa}</style></head><body><div class="box"><h1>No DegenClaw agent found for "${dcEscape(query)}"</h1><p>Try the agent name exactly as shown on <a href="https://degen.virtuals.io" target="_blank">degen.virtuals.io</a>, its id, or its wallet address.</p><p>Browse the full leaderboard at <a href="/degenclaw">/degenclaw</a></p></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Not found — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px}p{color:#707070}a{color:#00d4aa}</style></head><body><div class="box"><h1>No DegenClaw agent found for "${dcEscape(query)}"</h1><p>Try the agent name exactly as shown on <a href="https://degen.virtuals.io" target="_blank">degen.virtuals.io</a>, its id, or its wallet address.</p><p>Browse the full leaderboard at <a href="/degenclaw">/degenclaw</a></p></div></body></html>`;
 }
 
 function renderDegenClawError(query: string, msg: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>Error — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px;color:#ef4444}p{color:#8892a6}code{background:#1a1e26;padding:2px 6px;border-radius:4px;word-break:break-all}</style></head><body><div class="box"><h1>Upstream error</h1><p>We couldn't fetch data for "${dcEscape(query)}" right now.</p><p><code>${dcEscape(msg)}</code></p><p>Try again in a few seconds.</p></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Error — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px;color:#ef4444}p{color:#707070}code{background:#1a1a1a;padding:2px 6px;border-radius:1px;word-break:break-all}</style></head><body><div class="box"><h1>Upstream error</h1><p>We couldn't fetch data for "${dcEscape(query)}" right now.</p><p><code>${dcEscape(msg)}</code></p><p>Try again in a few seconds.</p></div></body></html>`;
 }
 
 function renderDegenClawIndex(all: DegenClawRiskReport[]): string {
   const top = [...all].sort((a, b) => b.trustScore - a.trustScore).slice(0, 25);
   const bottom = [...all].filter(r => r.raw.totalTradeCount >= 10).sort((a, b) => a.trustScore - b.trustScore).slice(0, 10);
   const row = (r: DegenClawRiskReport) => `<tr><td class="rank">#${r.leaderboardRank}</td><td><a href="/degenclaw/${encodeURIComponent(r.agentName)}">${dcEscape(r.agentName)}</a></td><td class="grade" style="color:${dcGradeColor(r.trustGrade)}">${r.trustGrade}</td><td class="num">${r.trustScore}</td><td class="num">$${r.raw.totalRealizedPnl.toFixed(0)}</td><td class="num">${(r.raw.winRate*100).toFixed(0)}%</td><td class="num">${r.raw.sortinoRatio.toFixed(2)}</td><td class="num">${r.raw.totalTradeCount}</td></tr>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>VIGIL × DegenClaw — Risk Rankings for Every Arena Agent</title><meta name="description" content="Independent VIGIL trust scores for every AI agent trading Hyperliquid perps in the DegenClaw Arena."/><style>body{margin:0;font:15px/1.55 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1}.wrap{max-width:960px;margin:0 auto;padding:32px 20px 60px}h1{font-size:28px;margin:0 0 6px}.lede{color:#8892a6;max-width:640px;margin-bottom:32px}h2{font-size:15px;text-transform:uppercase;letter-spacing:0.08em;color:#8892a6;margin:28px 0 12px;font-weight:600}table{width:100%;border-collapse:collapse;background:#13161d;border:1px solid #20242d;border-radius:10px;overflow:hidden}th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #20242d;font-size:14px}th{background:#0f1218;color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600}tr:last-child td{border-bottom:none}td.rank{color:#8892a6;font-variant-numeric:tabular-nums}td.num{text-align:right;font-variant-numeric:tabular-nums}td.grade{font-weight:700;font-size:16px}a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}.foot{color:#8892a6;font-size:12px;margin-top:28px;line-height:1.6}</style></head><body><div class="wrap"><h1>VIGIL × DegenClaw Arena</h1><p class="lede">Independent risk ratings for every AI agent trading Hyperliquid perps. DegenClaw's own AI Council ranks by expected return — VIGIL rates by downside risk. <em>Not investment advice.</em></p><h2>Top 25 by VIGIL Trust Score</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${top.map(row).join('')}</tbody></table><h2>Bottom 10 — Elevated Risk (min 10 trades)</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${bottom.map(row).join('')}</tbody></table><div class="foot">VIGIL Trust Score is informational only — not investment advice, not a recommendation to subscribe, not a guarantee of future performance.<br/>Data from <a href="https://degen.virtuals.io" target="_blank" rel="noopener">degen.virtuals.io</a> public leaderboard · updated every 60s<br/>JSON: <a href="/v1/degenclaw/leaderboard">/v1/degenclaw/leaderboard</a></div></div></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>VIGIL × DegenClaw — Risk Rankings for Every Arena Agent</title><meta name="description" content="Independent VIGIL trust scores for every AI agent trading Hyperliquid perps in the DegenClaw Arena."/><style>body{margin:0;font:15px/1.55 -apple-system,system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8}.wrap{max-width:960px;margin:0 auto;padding:32px 20px 60px}h1{font-size:28px;margin:0 0 6px}.lede{color:#707070;max-width:640px;margin-bottom:32px}h2{font-size:15px;text-transform:uppercase;letter-spacing:0.08em;color:#707070;margin:28px 0 12px;font-weight:600}table{width:100%;border-collapse:collapse;background:#141414;border:1px solid #1e1e1e;border-radius:2px;overflow:hidden}th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #1e1e1e;font-size:14px}th{background:#0f0f0f;color:#707070;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600}tr:last-child td{border-bottom:none}td.rank{color:#707070;font-variant-numeric:tabular-nums}td.num{text-align:right;font-variant-numeric:tabular-nums}td.grade{font-weight:700;font-size:16px}a{color:#00d4aa;text-decoration:none}a:hover{text-decoration:underline}.foot{color:#707070;font-size:12px;margin-top:28px;line-height:1.6}</style></head><body><div class="wrap"><h1>VIGIL × DegenClaw Arena</h1><p class="lede">Independent risk ratings for every AI agent trading Hyperliquid perps. DegenClaw's own AI Council ranks by expected return — VIGIL rates by downside risk. <em>Not investment advice.</em></p><h2>Top 25 by VIGIL Trust Score</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${top.map(row).join('')}</tbody></table><h2>Bottom 10 — Elevated Risk (min 10 trades)</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${bottom.map(row).join('')}</tbody></table><div class="foot">VIGIL Trust Score is informational only — not investment advice, not a recommendation to subscribe, not a guarantee of future performance.<br/>Data from <a href="https://degen.virtuals.io" target="_blank" rel="noopener">degen.virtuals.io</a> public leaderboard · updated every 60s<br/>JSON: <a href="/v1/degenclaw/leaderboard">/v1/degenclaw/leaderboard</a></div></div></body></html>`;
 }
 
 // ============================================================
@@ -1869,10 +1869,10 @@ app.get('/polymarket/search', (req, res) => {
 
   // Unknown username — show not found
   res.status(404).type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Not Found</title></head>
-  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center">
+  <body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center">
     <div style="font-size:28px;font-weight:800;letter-spacing:3px;margin-bottom:16px">VIGIL</div>
     <div style="font-size:18px;color:#ef4444;margin-bottom:12px">Username "${hEsc(q)}" not found</div>
-    <p style="color:#6b7280;max-width:400px">Try pasting a full wallet address (0x...), or search for a trader who has been scored recently. The username cache grows as more wallets get scored.</p>
+    <p style="color:#555;max-width:400px">Try pasting a full wallet address (0x...), or search for a trader who has been scored recently. The username cache grows as more wallets get scored.</p>
     <a href="/" style="margin-top:20px;color:#3b82f6;text-decoration:none">Back to VIGIL</a>
   </body></html>`);
 });
@@ -1955,10 +1955,10 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
       const barWidth = Math.max(2, (d.val / 100) * 240);
       const barColor = d.val >= 65 ? '#10b981' : d.val >= 35 ? '#eab308' : '#ef4444';
       return `
-        <text x="40" y="${y + 13}" fill="#9ca3af" font-size="12" font-family="system-ui,sans-serif">${d.label}</text>
-        <text x="155" y="${y + 13}" fill="#4b5563" font-size="9" font-family="system-ui,sans-serif">${d.weight}</text>
-        <rect x="185" y="${y + 1}" width="240" height="12" rx="6" fill="#1f2937"/>
-        <rect x="185" y="${y + 1}" width="${barWidth}" height="12" rx="6" fill="${barColor}"/>
+        <text x="40" y="${y + 13}" fill="#707070" font-size="12" font-family="system-ui,sans-serif">${d.label}</text>
+        <text x="155" y="${y + 13}" fill="#444" font-size="9" font-family="system-ui,sans-serif">${d.weight}</text>
+        <rect x="185" y="${y + 1}" width="240" height="12" rx="1" fill="#1e1e1e"/>
+        <rect x="185" y="${y + 1}" width="${barWidth}" height="12" rx="1" fill="${barColor}"/>
         <text x="432" y="${y + 13}" fill="#fff" font-size="12" font-weight="700" font-family="system-ui,sans-serif">${d.val}</text>
       `;
     }).join('');
@@ -1970,18 +1970,18 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
     const skillBarWidth = hasSkillData ? Math.max(10, (skill / (skill + luck)) * 200) : 0;
     const luckBarWidth = hasSkillData ? 200 - skillBarWidth : 0;
     const skillLuckSvg = hasSkillData ? `
-      <text x="40" y="420" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Skill vs Luck</text>
+      <text x="40" y="420" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Skill vs Luck</text>
       <rect x="185" y="410" width="${skillBarWidth}" height="14" rx="${luckBarWidth > 0 ? '7 0 0 7' : '7'}" fill="#10b981"/>
       <rect x="${185 + skillBarWidth}" y="410" width="${luckBarWidth}" height="14" rx="${skillBarWidth > 0 ? '0 7 7 0' : '7'}" fill="#6366f1"/>
-      <text x="395" y="422" fill="#9ca3af" font-size="10" font-family="system-ui,sans-serif">${skill.toFixed(0)}% / ${luck.toFixed(0)}%</text>
+      <text x="395" y="422" fill="#707070" font-size="10" font-family="system-ui,sans-serif">${skill.toFixed(0)}% / ${luck.toFixed(0)}%</text>
     ` : '';
 
     const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 600 315">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0a0a0a"/>
-      <stop offset="100%" stop-color="#0d1117"/>
+      <stop offset="0%" stop-color="#0c0c0c"/>
+      <stop offset="100%" stop-color="#0f0f0f"/>
     </linearGradient>
   </defs>
   <rect width="600" height="315" fill="url(#bg)"/>
@@ -1989,38 +1989,38 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
   <rect x="0" y="312" width="600" height="3" fill="${gc}" opacity="0.3"/>
 
   <!-- Logo -->
-  <text x="40" y="35" fill="#a78bfa" font-size="16" font-weight="800" letter-spacing="4" font-family="system-ui,sans-serif">VIGIL</text>
-  <text x="115" y="35" fill="#4b5563" font-size="11" font-family="system-ui,sans-serif">Trust Score</text>
+  <text x="40" y="35" fill="#00d4aa" font-size="16" font-weight="800" letter-spacing="4" font-family="monospace">VIGIL</text>
+  <text x="115" y="35" fill="#444" font-size="11" font-family="system-ui,sans-serif">Trust Score</text>
 
-  <!-- Grade circle -->
-  <circle cx="520" cy="75" r="48" fill="${gc}12" stroke="${gc}" stroke-width="2.5"/>
-  <text x="520" y="88" fill="${gc}" font-size="44" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
+  <!-- Grade box -->
+  <rect x="472" y="27" width="96" height="96" rx="2" fill="${gc}12" stroke="${gc}" stroke-width="2"/>
+  <text x="520" y="88" fill="${gc}" font-size="44" font-weight="800" text-anchor="middle" font-family="monospace">${report.trustGrade}</text>
   <text x="520" y="136" fill="#fff" font-size="22" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
-  <text x="520" y="152" fill="#6b7280" font-size="10" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustTier}</text>
+  <text x="520" y="152" fill="#555" font-size="10" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustTier}</text>
 
   <!-- Trader info -->
   <text x="40" y="68" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
-  <text x="40" y="85" fill="#6b7280" font-size="10" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
-  <text x="40" y="105" fill="#4b5563" font-size="10" font-family="system-ui,sans-serif">${hEsc(confDesc)}</text>
+  <text x="40" y="85" fill="#555" font-size="10" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
+  <text x="40" y="105" fill="#444" font-size="10" font-family="system-ui,sans-serif">${hEsc(confDesc)}</text>
 
   <!-- Key metrics row -->
-  <text x="40" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
+  <text x="40" y="135" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
   <text x="40" y="153" fill="${pnlColor}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
 
-  <text x="155" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
+  <text x="155" y="135" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
   <text x="155" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
 
-  <text x="255" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
+  <text x="255" y="135" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
   <text x="255" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
 
-  <text x="340" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Brier</text>
+  <text x="340" y="135" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Brier</text>
   <text x="340" y="153" fill="${report.calibrationReport.brierScore < 0.2 ? '#10b981' : report.calibrationReport.brierScore < 0.3 ? '#eab308' : '#ef4444'}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.calibrationReport.brierScore.toFixed(3)}</text>
 
   <!-- Divider -->
-  <line x1="40" y1="170" x2="460" y2="170" stroke="#1f2937" stroke-width="1"/>
+  <line x1="40" y1="170" x2="460" y2="170" stroke="#1e1e1e" stroke-width="1"/>
 
   <!-- Dimension bars header -->
-  <text x="40" y="190" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
+  <text x="40" y="190" fill="#555" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
   ${dimBars}
 
   <!-- Skill vs Luck -->
@@ -2028,9 +2028,9 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
 
   <!-- Footer -->
   <rect x="0" y="290" width="600" height="25" fill="#06080e"/>
-  <text x="40" y="306" fill="#374151" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
-  <text x="300" y="306" fill="#374151" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
-  <text x="560" y="306" fill="#374151" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
+  <text x="40" y="306" fill="#333" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
+  <text x="300" y="306" fill="#333" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
+  <text x="560" y="306" fill="#333" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
 </svg>`;
 
     res.set('Content-Type', 'image/svg+xml');
@@ -2076,13 +2076,13 @@ app.get('/polymarket/compare', async (req, res) => {
     const walletsParam = String(req.query.wallets || '');
     const wallets = walletsParam.split(',').map(w => w.trim().toLowerCase()).filter(w => w.startsWith('0x'));
     if (wallets.length < 2 || wallets.length > 5) {
-      return res.status(400).type('html').send(`<html><body style="background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center"><h2>Compare 2-5 wallets</h2><p style="color:#6b7280">Usage: /polymarket/compare?wallets=0x...,0x...</p></body></html>`);
+      return res.status(400).type('html').send(`<html><body style="background:#0c0c0c;color:#fff;font-family:sans-serif;padding:40px;text-align:center"><h2>Compare 2-5 wallets</h2><p style="color:#555">Usage: /polymarket/compare?wallets=0x...,0x...</p></body></html>`);
     }
 
     const results = await Promise.allSettled(wallets.map(w => scorePolymarketTrader(w)));
     const cards = results.map((r, i) => {
       if (r.status !== 'fulfilled' || !r.value) {
-        return `<div style="flex:1;min-width:200px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937"><p style="color:#ef4444">No data for ${wallets[i].slice(0,8)}...</p></div>`;
+        return `<div style="flex:1;min-width:200px;background:#141414;border-radius:2px;padding:20px;border:1px solid #1e1e1e"><p style="color:#ef4444">No data for ${wallets[i].slice(0,8)}...</p></div>`;
       }
       const d = r.value;
       const gc = d.trustGrade === 'A' ? '#10b981' : d.trustGrade === 'B' ? '#3b82f6' : d.trustGrade === 'C' ? '#eab308' : d.trustGrade === 'D' ? '#f97316' : '#ef4444';
@@ -2100,33 +2100,33 @@ app.get('/polymarket/compare', async (req, res) => {
       ];
       const dimRows = dims.map(([label, val]) => {
         const v = typeof val === 'number' ? val : 0;
-        return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:#6b7280">${label}</span><span style="color:#fff;font-weight:600">${val}</span></div>`;
+        return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:#555">${label}</span><span style="color:#fff;font-weight:600">${val}</span></div>`;
       }).join('');
 
-      return `<div style="flex:1;min-width:220px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937">
+      return `<div style="flex:1;min-width:220px;background:#141414;border-radius:2px;padding:20px;border:1px solid #1e1e1e">
         <div style="text-align:center;margin-bottom:12px">
-          <div style="display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:${gc}20;color:${gc};font-size:24px;font-weight:800;border:2px solid ${gc}40">${d.trustGrade}</div>
+          <div style="display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:2px;background:${gc}15;color:${gc};font-size:22px;font-weight:800;border:1px solid ${gc}40;font-family:'JetBrains Mono','SF Mono',monospace">${d.trustGrade}</div>
           <div style="font-size:28px;font-weight:800;color:#fff;margin-top:4px">${d.trustScore}</div>
-          <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">${d.trustTier}</div>
+          <div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">${d.trustTier}</div>
         </div>
         <div style="font-size:14px;font-weight:600;color:#fff;text-align:center;margin-bottom:4px">${hEsc(name)}</div>
-        <div style="font-size:11px;color:#4b5563;text-align:center;font-family:monospace;margin-bottom:12px">${d.wallet.slice(0,10)}...${d.wallet.slice(-4)}</div>
+        <div style="font-size:11px;color:#444;text-align:center;font-family:monospace;margin-bottom:12px">${d.wallet.slice(0,10)}...${d.wallet.slice(-4)}</div>
         <div style="text-align:center;font-size:18px;font-weight:700;color:${pnlColor};margin-bottom:12px">${pnl}</div>
-        <div style="border-top:1px solid #1f2937;padding-top:10px">${dimRows}</div>
-        <a href="/polymarket/${d.wallet}" style="display:block;text-align:center;margin-top:12px;padding:6px;background:#1f2937;border-radius:6px;color:#9ca3af;text-decoration:none;font-size:11px;font-weight:600">Full Scorecard &rarr;</a>
+        <div style="border-top:1px solid #1e1e1e;padding-top:10px">${dimRows}</div>
+        <a href="/polymarket/${d.wallet}" style="display:block;text-align:center;margin-top:12px;padding:6px;background:#1e1e1e;border-radius:2px;color:#707070;text-decoration:none;font-size:11px;font-weight:600">Full Scorecard &rarr;</a>
       </div>`;
     }).join('');
 
     res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL Compare</title></head>
-    <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+    <body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:24px">
       <div style="max-width:1000px;margin:0 auto">
-        <div style="text-align:center;margin-bottom:24px"><a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a><span style="color:#6b7280;font-size:13px;margin-left:12px">Compare</span></div>
+        <div style="text-align:center;margin-bottom:24px"><a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a><span style="color:#555;font-size:13px;margin-left:12px">Compare</span></div>
         <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${cards}</div>
-        <div style="text-align:center;margin-top:20px;color:#374151;font-size:11px">VIGIL Trust Score is informational only.</div>
+        <div style="text-align:center;margin-top:20px;color:#333;font-size:11px">VIGIL Trust Score is informational only.</div>
       </div>
     </body></html>`);
   } catch (err) {
-    res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
+    res.status(500).type('html').send(`<html><body style="background:#0c0c0c;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
   }
 });
 
@@ -2207,16 +2207,16 @@ app.get('/polymarket/leaderboard', (_req, res) => {
       case 'B': return '#3b82f6';
       case 'C': return '#f59e0b';
       case 'D': return '#ef4444';
-      default: return '#6b7280';
+      default: return '#555';
     }
   };
 
   let rows = '';
   if (leaderboard.length === 0) {
-    rows = `<tr><td colspan="7" style="text-align:center;padding:48px;color:#9ca3af">
+    rows = `<tr><td colspan="7" style="text-align:center;padding:48px;color:#707070">
       <div style="font-size:36px;margin-bottom:12px">🔍</div>
       <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px">Crawler is scanning...</div>
-      <div style="font-size:14px;color:#6b7280;max-width:400px;margin:0 auto">The discovery crawler is scanning resolved Polymarket markets to find skilled forecasters. It runs every 6 hours. Check back soon — or score any wallet now using the search above.</div>
+      <div style="font-size:14px;color:#555;max-width:400px;margin:0 auto">The discovery crawler is scanning resolved Polymarket markets to find skilled forecasters. It runs every 6 hours. Check back soon — or score any wallet now using the search above.</div>
     </td></tr>`;
   } else {
     rows = leaderboard.slice(0, 100).map((e, i) => {
@@ -2230,42 +2230,43 @@ app.get('/polymarket/leaderboard', (_req, res) => {
         ? `<span style="color:#10b981">+${bssCapped.toFixed(0)}%</span>`
         : `<span style="color:#ef4444">${bssCapped.toFixed(0)}%</span>`;
       const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
-      const rowBg = i % 2 === 0 ? '' : 'background:#0d101666;';
-      return `<tr style="border-bottom:1px solid #1f2937;${rowBg}transition:background .15s" onmouseover="this.style.background='#1f293766'" onmouseout="this.style.background='${i % 2 === 0 ? '' : '#0d101666'}'">
-        <td style="padding:10px 8px;color:#6b7280">${i + 1}</td>
-        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none;font-weight:600">${pmEscape(name)}</a></td>
+      const rowBg = i % 2 === 0 ? '' : 'background:#12121266;';
+      return `<tr style="border-bottom:1px solid #1e1e1e;${rowBg}transition:background .15s" onmouseover="this.style.background='#1a1a1a66'" onmouseout="this.style.background='${i % 2 === 0 ? '' : '#12121266'}'">
+        <td style="padding:10px 8px;color:#555">${i + 1}</td>
+        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#00d4aa;text-decoration:none;font-weight:600">${pmEscape(name)}</a></td>
         <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700;font-size:15px">${e.trustGrade}/${e.trustScore}</span></td>
         <td style="padding:10px 8px;text-align:center">${bss}</td>
-        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${(e.calibrationError * 100).toFixed(1)}%</td>
-        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${e.resolvedBets}</td>
+        <td style="padding:10px 8px;text-align:center;color:#e8e8e8">${(e.calibrationError * 100).toFixed(1)}%</td>
+        <td style="padding:10px 8px;text-align:center;color:#e8e8e8">${e.resolvedBets}</td>
         <td style="padding:10px 8px;text-align:right">${pnl}</td>
       </tr>`;
     }).join('');
   }
 
-  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title></head>
-  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet"></head>
+  <body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:24px">
     <div style="max-width:900px;margin:0 auto">
       <div style="text-align:center;margin-bottom:24px">
-        <a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a>
-        <span style="color:#6b7280;font-size:13px;margin-left:12px">Skill Leaderboard</span>
+        <a href="/" style="font-size:18px;font-weight:800;letter-spacing:4px;color:#fff;text-decoration:none;font-family:'JetBrains Mono','SF Mono',monospace">VIGIL</a>
+        <span style="color:#555;font-size:11px;margin-left:12px;letter-spacing:2px;text-transform:uppercase">Skill Leaderboard</span>
       </div>
-      <p style="text-align:center;color:#9ca3af;font-size:14px;margin-bottom:20px">
+      <p style="text-align:center;color:#707070;font-size:14px;margin-bottom:20px">
         Wallets ranked by actual forecasting skill — calibration, Brier Skill Score, and resolution — not PnL.
-        ${status.lastCrawl ? `<br><span style="color:#374151;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
+        ${status.lastCrawl ? `<br><span style="color:#333;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
       </p>
 
       <div style="max-width:480px;margin:0 auto 28px auto;text-align:center">
         <form onsubmit="var w=document.getElementById('lb-wallet').value.trim();if(!w)return false;window.location.href='/polymarket/'+encodeURIComponent(w);return false" style="display:flex;gap:8px">
-          <input id="lb-wallet" type="text" placeholder="Score any wallet — paste 0x address or username" style="flex:1;background:#111827;border:1px solid #374151;border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;outline:none" />
-          <button type="submit" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Score</button>
+          <input id="lb-wallet" type="text" placeholder="Score any wallet — paste 0x address or username" style="flex:1;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:2px;padding:10px 14px;color:#fff;font-size:13px;outline:none;font-family:'JetBrains Mono','SF Mono',monospace" />
+          <button type="submit" style="background:transparent;color:#00d4aa;border:1px solid #00d4aa;border-radius:2px;padding:10px 20px;font-weight:700;font-size:11px;cursor:pointer;white-space:nowrap;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace">Score</button>
         </form>
-        <div style="margin-top:8px;font-size:11px;color:#374151">Not on the leaderboard? Check any Polymarket wallet instantly.</div>
+        <div style="margin-top:8px;font-size:11px;color:#333">Not on the leaderboard? Check any Polymarket wallet instantly.</div>
       </div>
 
       <table style="width:100%;border-collapse:collapse;font-size:14px">
         <thead>
-          <tr style="border-bottom:2px solid #1f2937;color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:1px">
+          <tr style="border-bottom:2px solid #1e1e1e;color:#555;text-transform:uppercase;font-size:11px;letter-spacing:1px">
             <th style="padding:8px;text-align:left">#</th>
             <th style="padding:8px;text-align:left">Trader</th>
             <th style="padding:8px;text-align:center">Grade</th>
@@ -2277,10 +2278,10 @@ app.get('/polymarket/leaderboard', (_req, res) => {
         </thead>
         <tbody>${rows}</tbody>
       </table>
-      <div style="text-align:center;margin-top:24px;color:#374151;font-size:11px">
+      <div style="text-align:center;margin-top:24px;color:#333;font-size:11px">
         VIGIL Trust Score is informational only — not investment advice.<br>
-        <a href="/methodology" style="color:#4b5563;text-decoration:none">Methodology</a> ·
-        <a href="/v1/polymarket/leaderboard/skill" style="color:#4b5563;text-decoration:none">JSON API</a>
+        <a href="/methodology" style="color:#444;text-decoration:none">Methodology</a> ·
+        <a href="/v1/polymarket/leaderboard/skill" style="color:#444;text-decoration:none">JSON API</a>
       </div>
     </div>
   </body></html>`);
@@ -2392,6 +2393,7 @@ function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL x ${pmEscape(r.displayName)} - Polymarket Trust Score</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
 <meta property="og:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
 <meta property="og:description" content="Trust Score ${r.trustScore}/100 | ${r.trustTier} | ${r.raw.resolvedBets} resolved bets | PnL: ${r.raw.totalPnl >= 0 ? '+' : '-'}$${Math.round(Math.abs(r.raw.totalPnl)).toLocaleString()}">
 <meta property="og:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
@@ -2401,32 +2403,32 @@ function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
 <meta name="twitter:description" content="${r.trustTier} | ${r.raw.resolvedBets} resolved bets">
 <meta name="twitter:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
-.hdr{font-size:14px;color:#6b7280;margin-bottom:24px}.hdr b{color:#a78bfa}
-.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+.hdr{font-size:12px;color:#555;margin-bottom:24px;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace}.hdr b{color:#00d4aa}
+.card{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:24px;margin-bottom:16px}
 .hero{display:flex;justify-content:space-between;align-items:flex-start}
-.name{font-size:28px;font-weight:700;color:#fff}.wallet{font-size:12px;color:#6b7280;font-family:monospace;word-break:break-all}
-.tier{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;background:${gc}22;color:${gc};border:1px solid ${gc}44}
-.blurb{color:#9ca3af;margin-top:8px;font-size:14px}
-.grade{font-size:64px;font-weight:800;color:${gc};text-align:right}.score-num{font-size:16px;color:#9ca3af;text-align:right}
-.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
-.dim{display:flex;align-items:center;margin-bottom:10px}.dim-label{width:120px;font-size:14px;color:#9ca3af}
-.dim-bar{flex:1;height:10px;background:#1f2937;border-radius:5px;overflow:hidden;margin:0 12px}
-.dim-fill{height:100%;background:${bc};border-radius:5px}.dim-val{font-size:14px;color:#fff;min-width:30px;text-align:right}
+.name{font-size:28px;font-weight:700;color:#fff}.wallet{font-size:12px;color:#555;font-family:monospace;word-break:break-all}
+.tier{display:inline-block;padding:4px 12px;border-radius:2px;font-size:12px;font-weight:700;margin-top:8px;background:${gc}22;color:${gc};border:1px solid ${gc}44}
+.blurb{color:#707070;margin-top:8px;font-size:14px}
+.grade{font-size:64px;font-weight:800;color:${gc};text-align:right;font-family:'JetBrains Mono','SF Mono',monospace}.score-num{font-size:14px;color:#707070;text-align:right;font-family:'JetBrains Mono','SF Mono',monospace}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#555;letter-spacing:1px;margin-bottom:12px}
+.dim{display:flex;align-items:center;margin-bottom:10px}.dim-label{width:120px;font-size:14px;color:#707070}
+.dim-bar{flex:1;height:10px;background:#1e1e1e;border-radius:1px;overflow:hidden;margin:0 12px}
+.dim-fill{height:100%;background:${bc};border-radius:1px}.dim-val{font-size:14px;color:#fff;min-width:30px;text-align:right}
 .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
-.metric{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:12px}
-.metric-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px}
-.metric-val{font-size:20px;font-weight:700;color:#fff}
-.signal{padding:8px 16px;border-radius:6px;margin-bottom:6px;font-size:13px}
+.metric{background:#0f0f0f;border:1px solid #1e1e1e;border-radius:2px;padding:12px}
+.metric-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:4px}
+.metric-val{font-size:18px;font-weight:700;color:#fff;font-family:'JetBrains Mono','SF Mono',monospace}
+.signal{padding:8px 16px;border-radius:2px;margin-bottom:6px;font-size:13px}
 .green{background:#10b98115;color:#10b981;border:1px solid #10b98130}
 .red{background:#ef444415;color:#ef4444;border:1px solid #ef444430}
 .cal-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
-.cal-table th{text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #1f2937}
-.cal-table td{padding:6px 8px;border-bottom:1px solid #1f293744}
-.skill-bar{display:flex;gap:4px;margin-top:8px;height:24px;border-radius:6px;overflow:hidden}
+.cal-table th{text-align:left;color:#555;font-size:11px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #1e1e1e}
+.cal-table td{padding:6px 8px;border-bottom:1px solid #1e1e1e44}
+.skill-bar{display:flex;gap:4px;margin-top:8px;height:24px;border-radius:2px;overflow:hidden}
 .skill-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff}
-.foot{margin-top:24px;font-size:11px;color:#4b5563;text-align:center;line-height:1.8}
-.foot a{color:#6b7280}
+.foot{margin-top:24px;font-size:11px;color:#444;text-align:center;line-height:1.8}
+.foot a{color:#555}
 </style></head><body>
 <div class="hdr"><b>VIGIL</b> Trust Score for the AI Agent Economy</div>
 <div class="card"><div class="hero"><div>
@@ -2455,52 +2457,52 @@ ${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div cl
 </div></div>
 
 ${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-title">Calibration Analysis</div>
-<p style="font-size:13px;color:#9ca3af;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
+<p style="font-size:13px;color:#707070;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
 <table class="cal-table"><tr><th>Bucket</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Error</th></tr>${calBucketsHtml}</table>
-<div style="margin-top:12px"><span style="font-size:12px;color:#6b7280">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
+<div style="margin-top:12px"><span style="font-size:12px;color:#555">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
 
 <div style="margin-top:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Reliability (CAL)</div>
+<div style="background:#0f0f0f;padding:12px;border-radius:2px;border:1px solid #1e1e1e">
+<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">Reliability (CAL)</div>
 <div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.calibration < 0.03 ? '#10b981' : r.calibrationReport.brierDecomposition.calibration < 0.08 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.calibration.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Lower = better calibrated</div>
+<div style="font-size:10px;color:#444">Lower = better calibrated</div>
 </div>
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Resolution (RES)</div>
+<div style="background:#0f0f0f;padding:12px;border-radius:2px;border:1px solid #1e1e1e">
+<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">Resolution (RES)</div>
 <div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.resolution > 0.05 ? '#10b981' : r.calibrationReport.brierDecomposition.resolution > 0.01 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.resolution.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Higher = stronger opinions</div>
+<div style="font-size:10px;color:#444">Higher = stronger opinions</div>
 </div>
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
+<div style="background:#0f0f0f;padding:12px;border-radius:2px;border:1px solid #1e1e1e">
+<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
 <div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${Math.max(-999, Math.min(999, r.calibrationReport.brierSkillScore * 100)).toFixed(1)}%</div>
-<div style="font-size:10px;color:#4b5563">vs naive baseline</div>
+<div style="font-size:10px;color:#444">vs naive baseline</div>
 </div>
 </div>
 
 <div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Log Loss</div>
+<div style="background:#0f0f0f;padding:12px;border-radius:2px;border:1px solid #1e1e1e">
+<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">Log Loss</div>
 <div style="font-size:18px;font-weight:700;color:#fff">${r.calibrationReport.logLoss.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Skill: ${(r.calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive — sensitive to rare events</div>
+<div style="font-size:10px;color:#444">Skill: ${(r.calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive — sensitive to rare events</div>
 </div>
-${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Timeliness</div>
+${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#0f0f0f;padding:12px;border-radius:2px;border:1px solid #1e1e1e">
+<div style="font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px">Timeliness</div>
 <div style="font-size:18px;font-weight:700;color:${r.calibrationReport.timeliness.timelinessScore >= 60 ? '#10b981' : r.calibrationReport.timeliness.timelinessScore >= 30 ? '#eab308' : '#ef4444'}">${r.calibrationReport.timeliness.timelinessScore}/100</div>
-<div style="font-size:10px;color:#4b5563">Avg ${r.calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)}d before resolution, ${(r.calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover</div>
+<div style="font-size:10px;color:#444">Avg ${r.calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)}d before resolution, ${(r.calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover</div>
 </div>` : ''}
 </div>
 </div>` : ''}
 
 ${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill &amp; Variance Analysis</div>
-<p style="font-size:13px;color:#9ca3af;margin-bottom:12px">Skill measures calibration quality (0-100). Variance measures return volatility (0-100, higher = more volatile).</p>
+<p style="font-size:13px;color:#707070;margin-bottom:12px">Skill measures calibration quality (0-100). Variance measures return volatility (0-100, higher = more volatile).</p>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-<div style="text-align:center;padding:16px;background:#0f1218;border-radius:8px;border:1px solid #1f2937">
+<div style="text-align:center;padding:16px;background:#0f0f0f;border-radius:2px;border:1px solid #1e1e1e">
   <div style="font-size:32px;font-weight:800;color:#10b981">${r.calibrationReport.skillDecomposition.skill.toFixed(0)}</div>
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Skill Score</div>
+  <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Skill Score</div>
 </div>
-<div style="text-align:center;padding:16px;background:#0f1218;border-radius:8px;border:1px solid #1f2937">
+<div style="text-align:center;padding:16px;background:#0f0f0f;border-radius:2px;border:1px solid #1e1e1e">
   <div style="font-size:32px;font-weight:800;color:#6366f1">${r.calibrationReport.skillDecomposition.luck.toFixed(0)}</div>
-  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Variance</div>
+  <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Variance</div>
 </div>
 </div></div>` : ''}
 
@@ -2515,37 +2517,37 @@ ${r.onChain?.provenance ? `<div class="card"><div class="sec-title">On-Chain Ver
 <div class="metric"><div class="metric-label">USDC Out</div><div class="metric-val">$${Math.round(r.onChain.provenance.totalUsdcOut)}</div></div>
 <div class="metric"><div class="metric-label">Provenance</div><div class="metric-val" style="color:${r.onChain.provenance.provenanceGrade === 'A' ? '#10b981' : r.onChain.provenance.provenanceGrade === 'B' ? '#3b82f6' : r.onChain.provenance.provenanceGrade === 'C' ? '#eab308' : '#ef4444'}">${r.onChain.provenance.provenanceGrade} (${r.onChain.provenance.provenanceScore})</div></div>
 </div>
-${r.onChain.provenance.protocolsUsed.length > 0 ? `<div style="margin-top:12px;font-size:13px;color:#9ca3af">Protocols: ${r.onChain.provenance.protocolsUsed.join(', ')}</div>` : ''}
+${r.onChain.provenance.protocolsUsed.length > 0 ? `<div style="margin-top:12px;font-size:13px;color:#707070">Protocols: ${r.onChain.provenance.protocolsUsed.join(', ')}</div>` : ''}
 ${r.onChain.pnlDivergence !== null ? `<div style="margin-top:8px;font-size:13px;color:${r.onChain.pnlVerified ? '#10b981' : '#ef4444'}">PnL ${r.onChain.pnlVerified ? 'verified' : 'divergence'}: $${r.onChain.pnlDivergence} gap between API and on-chain USDC</div>` : ''}
 ${r.onChain.provenance.greenFlags.map(f => `<div class="signal green" style="margin-top:6px">\u2713 ${pmEscape(f)}</div>`).join('')}
 ${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top:6px">\u26A0 ${pmEscape(f)}</div>`).join('')}
-</div>` : r.onChain === null ? `<div class="card"><div class="sec-title">On-Chain Verification</div><p style="font-size:13px;color:#6b7280">On-chain verification not available. Basescan API key not configured.</p></div>` : ''}
+</div>` : r.onChain === null ? `<div class="card"><div class="sec-title">On-Chain Verification</div><p style="font-size:13px;color:#555">On-chain verification not available. Basescan API key not configured.</p></div>` : ''}
 
 <div class="card"><div class="sec-title">Reasoning</div>
-${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
+${r.reasoning.map(line => `<p style="font-size:13px;color:#707070;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
 </div>
 
-<div class="card" style="background:#0d1117;border:1px solid #1f2937">
+<div class="card" style="background:#0f0f0f;border:1px solid #1e1e1e">
 <div class="sec-title">What Does ${r.trustGrade}/${r.trustScore} Mean?</div>
-<p style="font-size:13px;color:#9ca3af;margin-bottom:8px;line-height:1.6">
+<p style="font-size:13px;color:#707070;margin-bottom:8px;line-height:1.6">
 ${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Their predictions are well-calibrated and consistently beat naive baselines.' :
   r.trustGrade === 'B' ? 'This trader shows genuine forecasting skill with a meaningful edge across multiple markets.' :
   r.trustGrade === 'C' ? 'This trader shows some skill signal, but not enough to clearly distinguish from luck. More data needed.' :
   r.trustGrade === 'D' ? 'Below average. The data shows poor calibration, thin evidence, or both. When this trader expresses high confidence, events don\'t happen at the rate they imply.' :
   'No demonstrated forecasting skill. This trader performs at or below random chance based on available data.'}
 </p>
-<p style="font-size:12px;color:#6b7280;line-height:1.6">
-<strong style="color:#9ca3af">Confidence:</strong> ${r.confidence.description}. ${r.confidence.margin <= 5 ? 'This score is highly reliable — enough resolved bets to be confident.' : r.confidence.margin <= 10 ? 'Moderate confidence — score may shift as more markets resolve.' : 'Low confidence — take this score with a grain of salt until more markets resolve.'}
+<p style="font-size:12px;color:#555;line-height:1.6">
+<strong style="color:#707070">Confidence:</strong> ${r.confidence.description}. ${r.confidence.margin <= 5 ? 'This score is highly reliable — enough resolved bets to be confident.' : r.confidence.margin <= 10 ? 'Moderate confidence — score may shift as more markets resolve.' : 'Low confidence — take this score with a grain of salt until more markets resolve.'}
 </p>
-<p style="font-size:11px;color:#4b5563;margin-top:8px">Methodology: Brier Score Decomposition (Murphy 1973), Log Loss, On-Chain USDC Verification. Same approach used by IARPA to identify superforecasters.</p>
+<p style="font-size:11px;color:#444;margin-top:8px">Methodology: Brier Score Decomposition (Murphy 1973), Log Loss, On-Chain USDC Verification. Same approach used by IARPA to identify superforecasters.</p>
 </div>
 
-<div class="card" style="text-align:center;background:#0d1117">
+<div class="card" style="text-align:center;background:#0f0f0f">
 <div class="sec-title">Share This Score</div>
 <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:#1d9bf0;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Post on X</a>
-<button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='Copied!'}.bind(this))" style="padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;border:none;cursor:pointer">Copy Link</button>
-<a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Score Card Image</a>
+<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:transparent;border:1px solid #1d9bf0;color:#1d9bf0;border-radius:2px;font-weight:600;font-size:12px;text-decoration:none;letter-spacing:1px;font-family:'JetBrains Mono',monospace">POST ON X</a>
+<button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='COPIED'}.bind(this))" style="padding:10px 20px;background:transparent;border:1px solid #2a2a2a;color:#707070;border-radius:2px;font-weight:600;font-size:12px;cursor:pointer;letter-spacing:1px;font-family:'JetBrains Mono',monospace">COPY LINK</button>
+<a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:transparent;border:1px solid #2a2a2a;color:#707070;border-radius:2px;font-weight:600;font-size:12px;text-decoration:none;letter-spacing:1px;font-family:'JetBrains Mono',monospace">SCORE CARD</a>
 </div>
 </div>
 
@@ -2555,13 +2557,13 @@ ${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Thei
 
 function renderPolymarketNotFound(wallet: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Trader Not Found</title>
-<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#ef4444;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<style>body{font-family:'Inter',-apple-system,sans-serif;background:#0c0c0c;color:#e8e8e8;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#ef4444;font-size:48px}p{color:#555}a{color:#00d4aa}</style></head>
 <body><div><h1>404</h1><p>No Polymarket activity found for <code>${pmEscape(wallet)}</code>.</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
 }
 
 function renderPolymarketError(wallet: string, message: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Error</title>
-<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#f97316;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<style>body{font-family:'Inter',-apple-system,sans-serif;background:#0c0c0c;color:#e8e8e8;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#f97316;font-size:48px}p{color:#555}a{color:#00d4aa}</style></head>
 <body><div><h1>502</h1><p>Error scoring <code>${pmEscape(wallet)}</code>: ${pmEscape(message)}</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
 }
 
@@ -2569,15 +2571,15 @@ function renderPolymarketIndex(): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL x Polymarket - Prediction Market Trust Scoring</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
-h1{font-size:32px;color:#fff;margin-bottom:8px}h1 span{color:#a78bfa}
-.sub{color:#9ca3af;font-size:14px;margin-bottom:32px;font-style:italic}
-.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
-.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+h1{font-size:32px;color:#fff;margin-bottom:8px}h1 span{color:#00d4aa}
+.sub{color:#707070;font-size:14px;margin-bottom:32px;font-style:italic}
+.card{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:24px;margin-bottom:16px}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#555;letter-spacing:1px;margin-bottom:12px}
 .feature{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
-.feat-title{color:#fff;font-weight:600;font-size:15px}.feat-desc{color:#9ca3af;font-size:13px}
-code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#a78bfa}
-.foot{margin-top:32px;font-size:11px;color:#4b5563;text-align:center}
+.feat-title{color:#fff;font-weight:600;font-size:15px}.feat-desc{color:#707070;font-size:13px}
+code{background:#1e1e1e;padding:2px 6px;border-radius:1px;font-size:13px;color:#00d4aa}
+.foot{margin-top:32px;font-size:11px;color:#444;text-align:center}
 </style></head><body>
 <h1><span>VIGIL</span> x Polymarket</h1>
 <div class="sub">Independent trust scoring for prediction market traders. Calibration-first methodology. <em>Not investment advice.</em></div>
@@ -2589,16 +2591,16 @@ code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 </div>
 
 <div class="card"><div class="sec-title">Score Any Trader</div>
-<p style="font-size:14px;color:#9ca3af;margin-bottom:12px">Paste any Polymarket wallet address:</p>
+<p style="font-size:14px;color:#707070;margin-bottom:12px">Paste any Polymarket wallet address:</p>
 <p><code>/polymarket/0x...</code> (HTML card)</p>
 <p><code>/v1/polymarket/0x...</code> (JSON API)</p>
 </div>
 
 <div class="card"><div class="sec-title">What Makes This Different</div>
-<p style="font-size:14px;color:#9ca3af">Every other Polymarket leaderboard ranks by raw P&L. 14 of the top 20 most profitable wallets are bots running structural arbitrage. VIGIL scores what actually matters: <strong style="color:#fff">can this trader predict the future?</strong></p>
+<p style="font-size:14px;color:#707070">Every other Polymarket leaderboard ranks by raw P&L. 14 of the top 20 most profitable wallets are bots running structural arbitrage. VIGIL scores what actually matters: <strong style="color:#fff">can this trader predict the future?</strong></p>
 </div>
 
-<div class="foot">VIGIL Trust Score is informational only.<br/><a href="/degenclaw" style="color:#6b7280">DegenClaw Scoring</a> | <a href="/v1" style="color:#6b7280">API Docs</a></div>
+<div class="foot">VIGIL Trust Score is informational only.<br/><a href="/degenclaw" style="color:#555">DegenClaw Scoring</a> | <a href="/v1" style="color:#555">API Docs</a></div>
 </body></html>`;
 }
 
@@ -2771,30 +2773,30 @@ app.get('/api/pricing', (_req, res) => {
       ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
       : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'];
 
-    const popular = id === 'pro' ? `<div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;padding:2px 12px;border-radius:12px;font-size:11px;font-weight:700">MOST POPULAR</div>` : '';
-    const border = id === 'pro' ? 'border:2px solid #3b82f6;' : 'border:1px solid #1f2937;';
+    const popular = id === 'pro' ? `<div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;padding:2px 12px;border-radius:2px;font-size:11px;font-weight:700">MOST POPULAR</div>` : '';
+    const border = id === 'pro' ? 'border:2px solid #3b82f6;' : 'border:1px solid #1e1e1e;';
 
-    return `<div style="position:relative;background:#111827;${border}border-radius:16px;padding:24px;flex:1;min-width:220px">
+    return `<div style="position:relative;background:#141414;${border}border-radius:2px;padding:24px;flex:1;min-width:220px">
       ${popular}
       <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:4px">${id.charAt(0).toUpperCase() + id.slice(1)}</h3>
-      <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#6b7280;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
-      <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#9ca3af;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
-      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1f2937;color:#9ca3af;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigiltrust.io?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
+      <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#555;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
+      <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#707070;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
+      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1e1e1e;color:#707070;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigiltrust.io?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
     </div>`;
   }).join('');
 
   res.setHeader('Content-Type', 'text/html');
   res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL API Pricing</title></head>
-<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px">
+<body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:40px 20px">
 <div style="max-width:1000px;margin:0 auto">
   <div style="text-align:center;margin-bottom:40px">
     <h1 style="font-size:32px;font-weight:800;letter-spacing:2px;margin-bottom:8px">VIGIL API</h1>
-    <p style="color:#6b7280;font-size:14px">Trust scores for prediction market wallets. Programmatic access.</p>
+    <p style="color:#555;font-size:14px">Trust scores for prediction market wallets. Programmatic access.</p>
   </div>
   <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${tierCards}</div>
   <div style="text-align:center;margin-top:40px">
-    <p style="color:#4b5563;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
-    <p style="color:#4b5563;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigiltrust.io" style="color:#3b82f6">api@vigiltrust.io</a></p>
+    <p style="color:#444;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
+    <p style="color:#444;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigiltrust.io" style="color:#3b82f6">api@vigiltrust.io</a></p>
   </div>
 </div></body></html>`);
 });
@@ -3183,13 +3185,13 @@ function renderHomepage(): string {
     const pnlStr = w.pnl >= 0 ? `+$${w.pnl.toLocaleString()}` : `-$${Math.abs(w.pnl).toLocaleString()}`;
     const pnlColor = w.pnl >= 0 ? '#10b981' : '#ef4444';
     return `<tr onclick="window.location='/polymarket/${w.wallet}'" style="cursor:pointer">
-<td style="color:#6b7280">${i + 1}</td>
-<td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#4b5563;font-family:monospace">${w.wallet.slice(0,8)}...${w.wallet.slice(-4)}</span></td>
+<td style="color:#555">${i + 1}</td>
+<td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#444;font-family:monospace">${w.wallet.slice(0,8)}...${w.wallet.slice(-4)}</span></td>
 <td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
-<td><span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}40">${w.grade}</span></td>
+<td><span style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${w.grade}</span></td>
 <td style="color:#fff;font-weight:600">${w.score}</td>
-<td>${w.calibration > 0 ? w.calibration : '<span style="color:#4b5563">—</span>'}</td>
-<td style="color:#9ca3af">${w.resolved}</td>
+<td>${w.calibration > 0 ? w.calibration : '<span style="color:#444">—</span>'}</td>
+<td style="color:#707070">${w.resolved}</td>
 </tr>`;
   }).join('');
 
@@ -3203,84 +3205,99 @@ function renderHomepage(): string {
     return `<tr onclick="window.location='/polymarket/${s.wallet}'" style="cursor:pointer">
 <td><span style="color:#fff;font-weight:600">${hEsc(s.displayName)}</span></td>
 <td style="color:${pnlColor};font-weight:600">${pnlStr}</td>
-<td><span style="display:inline-block;width:24px;height:24px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:24px;font-weight:800;font-size:12px;border:1px solid ${gc}40">${s.trustGrade}</span></td>
+<td><span style="display:inline-block;width:24px;height:24px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:24px;font-weight:800;font-size:12px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${s.trustGrade}</span></td>
 <td style="color:#fff">${s.trustScore}</td>
-<td style="color:#6b7280;font-size:12px">${agoStr}</td>
+<td style="color:#555;font-size:12px">${agoStr}</td>
 </tr>`;
   }).join('');
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL — Trust Scores for Polymarket Traders</title>
 <meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.7}
-a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;line-height:1.7}
+body::before{content:'';display:block;width:100%;height:3px;background:linear-gradient(90deg,#00d4aa,#00d4aa 40%,transparent);position:fixed;top:0;left:0;z-index:999}
+a{color:#00d4aa;text-decoration:none}a:hover{color:#fff}
 
-.wrap{max-width:900px;margin:0 auto;padding:32px 24px}
-.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:48px;border-bottom:1px solid #1f2937;padding-bottom:16px}
-.logo{font-size:24px;font-weight:800;color:#fff;letter-spacing:2px}
-.logo span{color:#a78bfa}
-.nav-links{display:flex;gap:20px;font-size:14px}
+.wrap{max-width:920px;margin:0 auto;padding:48px 28px 60px}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:64px;padding-bottom:20px;border-bottom:1px solid #1a1a1a}
+.logo{font-size:18px;font-weight:800;color:#fff;letter-spacing:6px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',Consolas,monospace}
+.nav-links{display:flex;gap:24px;font-size:13px;letter-spacing:1px;text-transform:uppercase}
+.nav-links a{color:#555;transition:color .2s}.nav-links a:hover{color:#00d4aa}
 
-.hero{text-align:center;margin-bottom:56px}
-.hero h1{font-size:42px;font-weight:800;color:#fff;line-height:1.2;margin-bottom:16px}
-.hero h1 em{font-style:normal;color:#a78bfa}
-.hero p{font-size:18px;color:#9ca3af;max-width:680px;margin:0 auto 32px}
+.hero{text-align:center;margin-bottom:72px}
+.hero h1{font-size:38px;font-weight:700;color:#fff;line-height:1.15;margin-bottom:20px;letter-spacing:-0.5px}
+.hero h1 em{font-style:normal;color:#00d4aa}
+.hero p{font-size:15px;color:#555;max-width:640px;margin:0 auto 40px;line-height:1.8}
 
-.search-box{max-width:600px;margin:0 auto 16px}
+.search-box{max-width:600px;margin:0 auto 20px}
 .search-box form{display:flex;gap:8px}
-.search-box input{flex:1;padding:14px 18px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:16px;outline:none}
-.search-box input:focus{border-color:#a78bfa}
-.search-box select{padding:14px 12px;border-radius:10px;border:1px solid #374151;background:#111827;color:#d1d5db;font-size:14px;cursor:pointer}
-.search-box button{padding:14px 28px;border-radius:10px;border:none;background:#7c3aed;color:#fff;font-weight:700;font-size:15px;cursor:pointer}
-.search-box button:hover{background:#6d28d9}
+.search-box input{flex:1;padding:16px 20px;border-radius:2px;border:1px solid #1e1e1e;background:#0a0a0a;color:#fff;font-size:13px;outline:none;font-family:'JetBrains Mono','SF Mono',monospace;transition:border-color .2s}
+.search-box input:focus{border-color:#00d4aa}
+.search-box select{padding:16px 14px;border-radius:2px;border:1px solid #1e1e1e;background:#0f0f0f;color:#e8e8e8;font-size:13px;cursor:pointer}
+.search-box button{padding:16px 32px;border-radius:2px;border:1px solid #00d4aa;background:transparent;color:#00d4aa;font-weight:700;cursor:pointer;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;transition:all .2s}
+.search-box button:hover{background:#00d4aa;color:#0c0c0c}
 
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-bottom:56px}
-.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:28px;transition:border-color .2s}
-.card:hover{border-color:#374151}
-.card h3{font-size:18px;font-weight:700;color:#fff;margin-bottom:8px}
-.card p{font-size:14px;color:#9ca3af;margin-bottom:16px}
-.card .tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;margin-right:6px}
-.tag.live{background:#10b98120;color:#10b981;border:1px solid #10b98140}
-.tag.chain{background:#3b82f620;color:#3b82f6;border:1px solid #3b82f640}
+.sec-hdr{font-size:11px;font-weight:700;letter-spacing:4px;text-transform:uppercase;color:#555;margin-bottom:24px;display:flex;align-items:center;gap:12px}
+.sec-hdr::after{content:'';flex:1;height:1px;background:#1a1a1a}
 
-.moat{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:32px;margin-bottom:56px}
-.moat h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
-.moat p{font-size:15px;color:#9ca3af;margin-bottom:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-bottom:72px}
+.card{background:transparent;border:1px solid #1a1a1a;border-radius:2px;padding:32px;transition:all .25s}
+.card:hover{border-color:#00d4aa30;background:#0f0f0f}
+.card h3{font-size:16px;font-weight:700;color:#fff;margin-bottom:10px;letter-spacing:0.5px}
+.card p{font-size:13px;color:#555;margin-bottom:18px;line-height:1.7}
+.card .tag{display:inline-block;padding:3px 10px;border-radius:2px;font-size:10px;font-weight:700;margin-right:6px;letter-spacing:1px}
+.tag.live{background:#10b98110;color:#10b981;border:1px solid #10b98125}
+.tag.chain{background:#3b82f610;color:#3b82f6;border:1px solid #3b82f625}
 
-.dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:56px}
-.dim{text-align:center;padding:20px;background:#111827;border:1px solid #1f2937;border-radius:10px}
-.dim .pct{font-size:28px;font-weight:800;color:#a78bfa}
-.dim .label{font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+.moat{background:#0f0f0f;border:1px solid #1a1a1a;border-radius:2px;padding:40px;margin-bottom:72px}
+.moat h2{font-size:20px;font-weight:700;color:#fff;margin-bottom:20px;letter-spacing:0.5px}
+.moat p{font-size:14px;color:#555;margin-bottom:14px;line-height:1.8}
 
-.api-sec{margin-bottom:56px}
-.api-sec h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
-.endpoint{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:14px 18px;margin-bottom:8px;font-family:'SF Mono',Consolas,monospace;font-size:13px;display:flex;justify-content:space-between;align-items:center}
-.endpoint .method{color:#10b981;font-weight:700;margin-right:12px}
-.endpoint .path{color:#d1d5db}
-.endpoint .desc{color:#6b7280;font-size:12px}
+.dims{display:grid;grid-template-columns:repeat(6,1fr);gap:0;margin-bottom:72px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden}
+.dim{text-align:center;padding:28px 12px;background:#0f0f0f;border-right:1px solid #1a1a1a}
+.dim:last-child{border-right:none}
+.dim .pct{font-size:26px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;margin-bottom:6px}
+.dim .label{font-size:9px;color:#555;text-transform:uppercase;letter-spacing:2px}
 
-.foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:13px;color:#6b7280;line-height:1.8}
-.foot a{color:#9ca3af}
-.foot strong{color:#9ca3af}
-table tr:hover td{background:#1f293766}
-table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:background .15s}
-table tr:nth-child(even) td{background:#0d101666}
+.api-sec{margin-bottom:72px}
+.api-sec h2{font-size:11px;font-weight:700;color:#555;margin-bottom:20px;letter-spacing:4px;text-transform:uppercase}
+.endpoint{background:transparent;border:1px solid #1a1a1a;border-radius:2px;padding:14px 20px;margin-bottom:6px;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:12px;display:flex;justify-content:space-between;align-items:center;transition:border-color .2s}
+.endpoint:hover{border-color:#1e1e1e;background:#0f0f0f}
+.endpoint .method{color:#00d4aa;font-weight:700;margin-right:12px}
+.endpoint .path{color:#e8e8e8}
+.endpoint .desc{color:#444;font-size:11px}
+
+.foot{text-align:center;padding:40px 0;border-top:1px solid #1a1a1a;font-size:11px;color:#333;line-height:2;font-family:'JetBrains Mono','SF Mono',monospace;letter-spacing:1px}
+.foot a{color:#444;transition:color .2s}.foot a:hover{color:#00d4aa}
+.foot strong{color:#444}
+table{border:1px solid #1a1a1a;border-radius:2px;overflow:hidden}
+table tr:hover td{background:#14141466}
+table td{padding:12px 8px;border-bottom:1px solid #1a1a1a22;transition:background .15s}
+table tr:nth-child(even) td{background:#0e0e0e44}
+table th{background:#0a0a0a;padding:12px 8px}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ffffff40;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+.pulse{animation:pulse 2s ease-in-out infinite}
 @media(max-width:640px){
-  .wrap{padding:12px}
+  .wrap{padding:16px}
+  .dims{grid-template-columns:repeat(3,1fr)}
+  .dim{border-bottom:1px solid #1a1a1a}
   table{font-size:12px}
-  table th,table td{padding:6px 4px}
-  .hero-title{font-size:28px!important}
-  .hero-sub{font-size:14px!important}
-  .cards{flex-direction:column}
+  table th,table td{padding:8px 4px}
+  .hero h1{font-size:26px}
+  .hero p{font-size:13px}
+  .cards{grid-template-columns:1fr}
   .card{min-width:auto!important}
   form{flex-direction:column}
-  form select,form input,form button{width:100%;border-radius:8px!important}
-  .sec-title{font-size:11px}
+  form select,form input,form button{width:100%;border-radius:2px!important}
+  .sec-title{font-size:10px}
   .endpoint{flex-direction:column;gap:4px}
+  .nav{flex-direction:column;gap:12px;text-align:center}
+  .nav-links{flex-wrap:wrap;justify-content:center;gap:12px}
 }
 </style>
 <script>
@@ -3328,25 +3345,26 @@ function doSubscribe(e) {
 <div class="wrap">
 
 <div class="nav">
-  <div class="logo"><span>V</span>IGIL</div>
+  <div class="logo">VIGIL</div>
   <div class="nav-links">
-    <a href="/polymarket">Polymarket</a>
+    <a href="/polymarket">Score</a>
     <a href="/polymarket/compare">Compare</a>
-    <a href="/polymarket/leaderboard">Skill Leaderboard</a>
-    <a href="/api/pricing">API Pricing</a>
+    <a href="/polymarket/leaderboard">Leaderboard</a>
+    <a href="/api/pricing">API</a>
     <a href="/v1">Docs</a>
   </div>
 </div>
 
 <div class="hero">
   <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
-  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D on VIGIL.</p>
-  <div style="display:flex;justify-content:center;gap:32px;margin-top:8px;flex-wrap:wrap">
-    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#a78bfa">600+</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Wallets Scanned</div></div>
-    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#ef4444">0</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">A-Grade Found</div></div>
-    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#3b82f6">1</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">B-Grade Found</div></div>
-    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#10b981">500+</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Markets Crawled</div></div>
-  </div>
+  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D.</p>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:48px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;background:#0a0a0a">
+  <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">600+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Wallets Scanned</div></div>
+  <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">0</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">A-Grade Found</div></div>
+  <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">1</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">B-Grade Found</div></div>
+  <div style="text-align:center;padding:28px 16px"><div style="font-size:28px;font-weight:800;color:#555;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">500+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Markets Crawled</div></div>
 </div>
 
 <div class="search-box">
@@ -3356,14 +3374,15 @@ function doSubscribe(e) {
   </form>
 </div>
 
-<div style="max-width:560px;margin:0 auto 48px;text-align:center;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px 28px">
-  <div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:6px">We scanned 600+ wallets. Only 1 scored above C.</div>
-  <p style="font-size:13px;color:#9ca3af;margin-bottom:14px">Get alerted when VIGIL discovers the first A-grade forecaster on Polymarket.</p>
+<div style="max-width:560px;margin:0 auto 48px;text-align:center;background:#0f0f0f;border:1px solid #1e1e1e;border-radius:2px;padding:24px 28px">
+  <div style="font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:8px">ALERT SYSTEM</div>
+  <div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:6px">600+ wallets scanned. 0 A-grades found.</div>
+  <p style="font-size:13px;color:#555;margin-bottom:14px">Get notified when VIGIL discovers the first A-grade forecaster.</p>
   <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
-    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:14px;outline:none" />
-    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Alert Me</button>
+    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:2px;border:1px solid #2a2a2a;background:#0c0c0c;color:#fff;font-size:13px;outline:none;font-family:'JetBrains Mono','SF Mono',monospace" />
+    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:2px;border:1px solid #00d4aa;background:transparent;color:#00d4aa;font-weight:700;font-size:11px;cursor:pointer;white-space:nowrap;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace">ALERT ME</button>
   </form>
-  <div id="submsg" style="font-size:13px;margin-top:8px;color:#10b981;display:none"></div>
+  <div id="submsg" style="font-size:13px;margin-top:8px;color:#00d4aa;display:none"></div>
 </div>
 
 <div class="cards">
@@ -3377,9 +3396,9 @@ function doSubscribe(e) {
     <h3>Compare Head-to-Head</h3>
     <p>Put two wallets side by side. See who's actually better across every dimension.</p>
     <form onsubmit="doCompare(event)" style="display:flex;gap:6px;margin-top:8px">
-      <input type="text" id="cmp1" placeholder="Wallet 1" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
-      <input type="text" id="cmp2" placeholder="Wallet 2" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
-      <button type="submit" style="padding:8px 14px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:700;font-size:12px;cursor:pointer">Go</button>
+      <input type="text" id="cmp1" placeholder="Wallet 1" style="flex:1;padding:8px;border-radius:2px;border:1px solid #2a2a2a;background:#0f0f0f;color:#fff;font-size:11px;font-family:'JetBrains Mono',monospace" />
+      <input type="text" id="cmp2" placeholder="Wallet 2" style="flex:1;padding:8px;border-radius:2px;border:1px solid #2a2a2a;background:#0f0f0f;color:#fff;font-size:11px;font-family:'JetBrains Mono',monospace" />
+      <button type="submit" style="padding:8px 14px;border-radius:2px;border:1px solid #00d4aa;background:transparent;color:#00d4aa;font-weight:700;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;letter-spacing:1px">GO</button>
     </form>
     <span class="tag live">LIVE</span>
     <span class="tag chain">Polygon</span>
@@ -3395,31 +3414,31 @@ function doSubscribe(e) {
 <div style="display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:56px">
 
 <div class="card" style="overflow-x:auto">
-  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Polymarket Top 10 by PnL — VIGIL Scored</div>
-  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
+  <div class="sec-hdr">Polymarket Top 10 by PnL — VIGIL Scored</div>
+  <p style="font-size:14px;color:#707070;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
-  <tr style="border-bottom:1px solid #1f2937">
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Cal.</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Resolved</th>
+  <tr style="border-bottom:1px solid #1e1e1e">
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">#</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Cal.</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Resolved</th>
   </tr>
   ${leaderboardRows}
   </table>
 </div>
 
 ${recentRows.length > 0 ? `<div class="card">
-  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Recently Scored</div>
+  <div class="sec-hdr">Recently Scored</div>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
-  <tr style="border-bottom:1px solid #1f2937">
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
-    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">When</th>
+  <tr style="border-bottom:1px solid #1e1e1e">
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">When</th>
   </tr>
   ${recentRows}
   </table>
@@ -3428,7 +3447,7 @@ ${recentRows.length > 0 ? `<div class="card">
 </div>
 
 <div class="moat">
-  <h2>What Makes VIGIL Different</h2>
+  <div class="sec-hdr" style="margin-bottom:20px">What Makes VIGIL Different</div>
   <p>14 of the top 20 most profitable wallets on prediction market leaderboards are bots running structural arbitrage. Raw PnL doesn't tell you if someone can actually predict the future — it tells you if they're fast.</p>
   <p>VIGIL is the first system that answers the real question: <strong style="color:#fff">when a trader buys at $0.70, implying 70% confidence, does the event actually happen 70% of the time?</strong> That's calibration — and nobody else computes it.</p>
   <p>Every score is backed by on-chain verification from Base and Polygon. Wallet age, transaction count, USDC flow cross-checks, protocol fingerprinting. We don't trust what APIs report — we verify it against the blockchain.</p>
@@ -3443,24 +3462,24 @@ ${recentRows.length > 0 ? `<div class="card">
   <div class="dim"><div class="pct">10%</div><div class="label">Sample Size</div></div>
 </div>
 
-<div class="card" style="margin-bottom:32px">
-  <h2 style="font-size:20px;color:#fff;margin-bottom:16px">What Do The Grades Mean?</h2>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #064e3b"><div style="font-size:28px;font-weight:800;color:#10b981">A</div><div style="font-size:11px;color:#6b7280">80-100</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Elite forecaster. Beats naive baselines by a wide margin. Rare.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #1e3a5f"><div style="font-size:28px;font-weight:800;color:#3b82f6">B</div><div style="font-size:11px;color:#6b7280">65-79</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Skilled. Consistent edge across multiple markets with real data.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #713f12"><div style="font-size:28px;font-weight:800;color:#eab308">C</div><div style="font-size:11px;color:#6b7280">50-64</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Average. Some skill signal, but not enough to distinguish from luck.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7c2d12"><div style="font-size:28px;font-weight:800;color:#f97316">D</div><div style="font-size:11px;color:#6b7280">35-49</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Below average. Data shows poor calibration or thin evidence.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7f1d1d"><div style="font-size:28px;font-weight:800;color:#ef4444">F</div><div style="font-size:11px;color:#6b7280">0-34</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">No demonstrated skill. Performs at or below random chance.</div></div>
+<div class="card" style="margin-bottom:48px;background:#0f0f0f">
+  <div class="sec-hdr" style="margin-bottom:20px">Grade Scale</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;margin-bottom:24px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden">
+    <div style="text-align:center;padding:20px 8px;border-right:1px solid #1a1a1a"><div style="font-size:32px;font-weight:800;color:#22c55e;font-family:'JetBrains Mono',monospace;line-height:1">A</div><div style="font-size:10px;color:#444;margin-top:6px;font-family:'JetBrains Mono',monospace">80-100</div><div style="font-size:11px;color:#555;margin-top:6px;line-height:1.4">Elite forecaster</div></div>
+    <div style="text-align:center;padding:20px 8px;border-right:1px solid #1a1a1a"><div style="font-size:32px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono',monospace;line-height:1">B</div><div style="font-size:10px;color:#444;margin-top:6px;font-family:'JetBrains Mono',monospace">65-79</div><div style="font-size:11px;color:#555;margin-top:6px;line-height:1.4">Skilled trader</div></div>
+    <div style="text-align:center;padding:20px 8px;border-right:1px solid #1a1a1a"><div style="font-size:32px;font-weight:800;color:#f59e0b;font-family:'JetBrains Mono',monospace;line-height:1">C</div><div style="font-size:10px;color:#444;margin-top:6px;font-family:'JetBrains Mono',monospace">50-64</div><div style="font-size:11px;color:#555;margin-top:6px;line-height:1.4">Average signal</div></div>
+    <div style="text-align:center;padding:20px 8px;border-right:1px solid #1a1a1a"><div style="font-size:32px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono',monospace;line-height:1">D</div><div style="font-size:10px;color:#444;margin-top:6px;font-family:'JetBrains Mono',monospace">35-49</div><div style="font-size:11px;color:#555;margin-top:6px;line-height:1.4">Below average</div></div>
+    <div style="text-align:center;padding:20px 8px"><div style="font-size:32px;font-weight:800;color:#991b1b;font-family:'JetBrains Mono',monospace;line-height:1">F</div><div style="font-size:10px;color:#444;margin-top:6px;font-family:'JetBrains Mono',monospace">0-34</div><div style="font-size:11px;color:#555;margin-top:6px;line-height:1.4">No skill signal</div></div>
   </div>
-  <div style="font-size:13px;color:#6b7280;line-height:1.7">
-    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Confidence intervals</strong> tell you how reliable the grade is. A score of D/47 ± 3 (high confidence) means we're confident the true score is between 44 and 50 — there's enough data (200+ resolved bets) to be sure. A score of D/47 ± 25 (very low confidence) means the true score could be anywhere from 22 to 72 — take it with a grain of salt.</p>
-    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Brier Skill Score (BSS)</strong> compares a trader against a strategy that just predicts the historical average every time. Positive BSS = better than guessing. Negative BSS = worse than guessing. A BSS of -149% means they perform 2.5x worse than if they'd just said "50/50" on everything.</p>
-    <p><strong style="color:#9ca3af">How we score:</strong> Same methodology that IARPA used to identify superforecasters — Brier Score Decomposition (Murphy 1973), Log Loss for rare-event sensitivity, and on-chain USDC verification against Polygon. We measure whether traders can actually predict the future, not whether they're fast or lucky.</p>
+  <div style="font-size:13px;color:#555;line-height:1.7">
+    <p style="margin-bottom:8px"><strong style="color:#707070">Confidence intervals</strong> tell you how reliable the grade is. A score of D/47 ± 3 (high confidence) means we're confident the true score is between 44 and 50 — there's enough data (200+ resolved bets) to be sure. A score of D/47 ± 25 (very low confidence) means the true score could be anywhere from 22 to 72 — take it with a grain of salt.</p>
+    <p style="margin-bottom:8px"><strong style="color:#707070">Brier Skill Score (BSS)</strong> compares a trader against a strategy that just predicts the historical average every time. Positive BSS = better than guessing. Negative BSS = worse than guessing. A BSS of -149% means they perform 2.5x worse than if they'd just said "50/50" on everything.</p>
+    <p><strong style="color:#707070">How we score:</strong> Same methodology that IARPA used to identify superforecasters — Brier Score Decomposition (Murphy 1973), Log Loss for rare-event sensitivity, and on-chain USDC verification against Polygon. We measure whether traders can actually predict the future, not whether they're fast or lucky.</p>
   </div>
 </div>
 
 <div class="api-sec">
-  <h2>API Endpoints</h2>
+  <div class="sec-hdr">API Endpoints</div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/compare</span></div><span class="desc">Compare two wallets head-to-head</span></div>
