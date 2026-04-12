@@ -148,6 +148,11 @@ setInterval(() => {
 }, 300_000);
 
 // ============================================================
+//  EMAIL CAPTURE — Newsletter / launch updates
+// ============================================================
+const emailSubscribers: Set<string> = new Set();
+
+// ============================================================
 //  API KEY SYSTEM — Paid tiers bypass rate limits
 // ============================================================
 
@@ -1920,81 +1925,98 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
     const pnlStr = pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
     const pnlColor = pnl >= 0 ? '#10b981' : '#ef4444';
     const name = report.displayName.length > 20 ? report.displayName.slice(0, 18) + '...' : report.displayName;
+    const confDesc = report.confidence?.description || `${report.trustGrade}/${report.trustScore}`;
+
     const dims = [
-      { label: 'Calibration', val: report.calibration },
-      { label: 'Live Edge', val: (report as any).liveEdge ?? 50 },
-      { label: 'Profitability', val: report.profitability },
-      { label: 'Consistency', val: report.consistency },
-      { label: 'Discipline', val: report.discipline },
-      { label: 'Sample Size', val: report.sampleSize },
+      { label: 'Calibration', val: report.calibration, weight: '25%' },
+      { label: 'Live Edge', val: (report as any).liveEdge ?? 50, weight: '25%' },
+      { label: 'Profitability', val: report.profitability, weight: '15%' },
+      { label: 'Consistency', val: report.consistency, weight: '15%' },
+      { label: 'Discipline', val: report.discipline, weight: '10%' },
+      { label: 'Sample Size', val: report.sampleSize, weight: '10%' },
     ];
 
     const dimBars = dims.map((d, i) => {
-      const y = 220 + i * 38;
-      const barWidth = Math.max(2, (d.val / 100) * 280);
+      const y = 200 + i * 34;
+      const barWidth = Math.max(2, (d.val / 100) * 240);
+      const barColor = d.val >= 65 ? '#10b981' : d.val >= 35 ? '#eab308' : '#ef4444';
       return `
-        <text x="40" y="${y + 14}" fill="#6b7280" font-size="13" font-family="system-ui,sans-serif">${d.label}</text>
-        <rect x="170" y="${y + 2}" width="280" height="14" rx="7" fill="#1f2937"/>
-        <rect x="170" y="${y + 2}" width="${barWidth}" height="14" rx="7" fill="${gc}"/>
-        <text x="460" y="${y + 14}" fill="#fff" font-size="13" font-weight="600" font-family="system-ui,sans-serif">${d.val}</text>
+        <text x="40" y="${y + 13}" fill="#9ca3af" font-size="12" font-family="system-ui,sans-serif">${d.label}</text>
+        <text x="155" y="${y + 13}" fill="#4b5563" font-size="9" font-family="system-ui,sans-serif">${d.weight}</text>
+        <rect x="185" y="${y + 1}" width="240" height="12" rx="6" fill="#1f2937"/>
+        <rect x="185" y="${y + 1}" width="${barWidth}" height="12" rx="6" fill="${barColor}"/>
+        <text x="432" y="${y + 13}" fill="#fff" font-size="12" font-weight="700" font-family="system-ui,sans-serif">${d.val}</text>
       `;
     }).join('');
 
-    // Top flags (max 2)
-    const topFlags = report.flags.slice(0, 2).map((f, i) => {
-      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
-      return `<text x="40" y="${475 + i * 22}" fill="#ef4444" font-size="11" font-family="system-ui,sans-serif">\u26A0 ${hEsc(short)}</text>`;
-    }).join('');
-    const topGreens = report.greenFlags.slice(0, 1).map((f, i) => {
-      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
-      return `<text x="40" y="${475 + report.flags.slice(0, 2).length * 22 + i * 22}" fill="#10b981" font-size="11" font-family="system-ui,sans-serif">\u2713 ${hEsc(short)}</text>`;
-    }).join('');
+    // Skill vs Luck bar
+    const skill = report.calibrationReport?.skillDecomposition?.skill ?? 0;
+    const luck = report.calibrationReport?.skillDecomposition?.luck ?? 0;
+    const hasSkillData = skill > 0 || luck > 0;
+    const skillBarWidth = hasSkillData ? Math.max(10, (skill / (skill + luck)) * 200) : 0;
+    const luckBarWidth = hasSkillData ? 200 - skillBarWidth : 0;
+    const skillLuckSvg = hasSkillData ? `
+      <text x="40" y="420" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Skill vs Luck</text>
+      <rect x="185" y="410" width="${skillBarWidth}" height="14" rx="${luckBarWidth > 0 ? '7 0 0 7' : '7'}" fill="#10b981"/>
+      <rect x="${185 + skillBarWidth}" y="410" width="${luckBarWidth}" height="14" rx="${skillBarWidth > 0 ? '0 7 7 0' : '7'}" fill="#6366f1"/>
+      <text x="395" y="422" fill="#9ca3af" font-size="10" font-family="system-ui,sans-serif">${skill.toFixed(0)}% / ${luck.toFixed(0)}%</text>
+    ` : '';
 
     const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 600 315">
-  <rect width="600" height="315" fill="#0a0a0a"/>
-  <rect x="0" y="0" width="600" height="4" fill="${gc}"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0a"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="315" fill="url(#bg)"/>
+  <rect x="0" y="0" width="600" height="3" fill="${gc}"/>
+  <rect x="0" y="312" width="600" height="3" fill="${gc}" opacity="0.3"/>
 
   <!-- Logo -->
-  <text x="40" y="42" fill="#fff" font-size="18" font-weight="800" letter-spacing="3" font-family="system-ui,sans-serif">VIGIL</text>
-  <text x="120" y="42" fill="#6b7280" font-size="12" font-family="system-ui,sans-serif">Trust Score</text>
+  <text x="40" y="35" fill="#a78bfa" font-size="16" font-weight="800" letter-spacing="4" font-family="system-ui,sans-serif">VIGIL</text>
+  <text x="115" y="35" fill="#4b5563" font-size="11" font-family="system-ui,sans-serif">Trust Score</text>
 
   <!-- Grade circle -->
-  <circle cx="520" cy="90" r="50" fill="${gc}18" stroke="${gc}" stroke-width="2"/>
-  <text x="520" y="102" fill="${gc}" font-size="48" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
-  <text x="520" y="155" fill="#fff" font-size="20" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
-  <text x="520" y="172" fill="#6b7280" font-size="11" text-anchor="middle" text-transform="uppercase" font-family="system-ui,sans-serif">${report.trustTier}</text>
+  <circle cx="520" cy="75" r="48" fill="${gc}12" stroke="${gc}" stroke-width="2.5"/>
+  <text x="520" y="88" fill="${gc}" font-size="44" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
+  <text x="520" y="136" fill="#fff" font-size="22" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
+  <text x="520" y="152" fill="#6b7280" font-size="10" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustTier}</text>
 
   <!-- Trader info -->
-  <text x="40" y="85" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
-  <text x="40" y="108" fill="#6b7280" font-size="11" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
+  <text x="40" y="68" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
+  <text x="40" y="85" fill="#6b7280" font-size="10" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
+  <text x="40" y="105" fill="#4b5563" font-size="10" font-family="system-ui,sans-serif">${hEsc(confDesc)}</text>
 
   <!-- Key metrics row -->
-  <text x="40" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
-  <text x="40" y="165" fill="${pnlColor}" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
+  <text x="40" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
+  <text x="40" y="153" fill="${pnlColor}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
 
-  <text x="170" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
-  <text x="170" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
+  <text x="155" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
+  <text x="155" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
 
-  <text x="280" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
-  <text x="280" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
+  <text x="255" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
+  <text x="255" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
 
-  <text x="370" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Markets</text>
-  <text x="370" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.uniqueMarkets}</text>
+  <text x="340" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Brier</text>
+  <text x="340" y="153" fill="${report.calibrationReport.brierScore < 0.2 ? '#10b981' : report.calibrationReport.brierScore < 0.3 ? '#eab308' : '#ef4444'}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.calibrationReport.brierScore.toFixed(3)}</text>
 
   <!-- Divider -->
-  <line x1="40" y1="190" x2="560" y2="190" stroke="#1f2937" stroke-width="1"/>
+  <line x1="40" y1="170" x2="460" y2="170" stroke="#1f2937" stroke-width="1"/>
 
-  <!-- Dimension bars -->
-  <text x="40" y="210" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
+  <!-- Dimension bars header -->
+  <text x="40" y="190" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
   ${dimBars}
 
-  <!-- Flags -->
-  ${topFlags}
-  ${topGreens}
+  <!-- Skill vs Luck -->
+  ${skillLuckSvg}
 
   <!-- Footer -->
-  <text x="40" y="305" fill="#374151" font-size="10" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com \u2022 Informational only</text>
+  <rect x="0" y="290" width="600" height="25" fill="#06080e"/>
+  <text x="40" y="306" fill="#374151" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
+  <text x="300" y="306" fill="#374151" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
+  <text x="560" y="306" fill="#374151" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
 </svg>`;
 
     res.set('Content-Type', 'image/svg+xml');
@@ -2294,7 +2316,16 @@ ${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top
 ${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
 </div>
 
-<div class="foot"><strong>${pmEscape(r.disclaimer)}</strong><br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
+<div class="card" style="text-align:center;background:#0d1117">
+<div class="sec-title">Share This Score</div>
+<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:#1d9bf0;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Post on X</a>
+<button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='Copied!'}.bind(this))" style="padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;border:none;cursor:pointer">Copy Link</button>
+<a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Score Card Image</a>
+</div>
+</div>
+
+<div class="foot"><strong>Not financial advice.</strong> VIGIL Trust Score is informational only.<br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
 </body></html>`;
 }
 
@@ -2727,6 +2758,26 @@ app.get('/telegram/setup', async (req, res) => {
   res.json({ webhookUrl, result });
 });
 
+// ============================================================
+//  EMAIL CAPTURE ENDPOINT
+// ============================================================
+app.post('/subscribe', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@') || email.length < 5 || email.length > 200) {
+    return res.status(400).json({ error: 'Valid email required' });
+  }
+  if (emailSubscribers.has(email)) {
+    return res.json({ success: true, message: 'Already subscribed' });
+  }
+  emailSubscribers.add(email);
+  console.log(`[SUBSCRIBE] New subscriber: ${email} (total: ${emailSubscribers.size})`);
+  res.json({ success: true, message: 'Subscribed! We\'ll notify you on launch updates.' });
+});
+
+app.get('/subscribe/count', (_req, res) => {
+  res.json({ subscribers: emailSubscribers.size });
+});
+
 // --- 404 handler (must be last route) ---
 app.use((_req, res) => {
   res.status(404).json({
@@ -2743,7 +2794,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║       VIGIL Trust Score API v1.14.0              ║
+║       VIGIL Trust Score API v1.15.0              ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
@@ -2961,12 +3012,33 @@ function doSearch(e) {
   e.preventDefault();
   var q = document.getElementById('q').value.trim();
   if (!q) return;
-  // Show loading state
   var btn = e.target.querySelector('button');
   btn.innerHTML = '<span class="spinner"></span> Scoring...';
   btn.disabled = true;
   if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
   else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
+}
+function doSubscribe(e) {
+  e.preventDefault();
+  var email = document.getElementById('subemail').value.trim();
+  if (!email) return;
+  var btn = document.getElementById('subbtn');
+  btn.textContent = '...';
+  btn.disabled = true;
+  fetch('/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      document.getElementById('submsg').style.display='block';
+      document.getElementById('submsg').textContent=d.message||'Subscribed!';
+      btn.textContent='Done';
+    })
+    .catch(function(){
+      document.getElementById('submsg').style.display='block';
+      document.getElementById('submsg').style.color='#ef4444';
+      document.getElementById('submsg').textContent='Something went wrong. Try again.';
+      btn.textContent='Subscribe';
+      btn.disabled=false;
+    });
 }
 </script>
 </head><body>
@@ -2984,7 +3056,7 @@ function doSearch(e) {
 
 <div class="hero">
   <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
-  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. 7 of Polymarket's top 10 most profitable wallets scored F on VIGIL.</p>
+  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. 6 of Polymarket's top 10 most profitable wallets scored F on VIGIL.</p>
 </div>
 
 <div class="search-box">
@@ -2992,6 +3064,15 @@ function doSearch(e) {
     <input type="text" id="q" placeholder="Wallet address (0x...) or username" autocomplete="off" />
     <button type="submit">Score</button>
   </form>
+</div>
+
+<div class="email-box" style="max-width:500px;margin:0 auto 40px;text-align:center">
+  <p style="font-size:13px;color:#6b7280;margin-bottom:10px">Get notified when we launch new features</p>
+  <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
+    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:14px;outline:none" />
+    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Subscribe</button>
+  </form>
+  <div id="submsg" style="font-size:13px;margin-top:8px;color:#10b981;display:none"></div>
 </div>
 
 <div class="cards">
@@ -3078,8 +3159,9 @@ ${recentRows.length > 0 ? `<div class="card">
 </div>
 
 <div class="foot">
-  VIGIL Trust Score is informational only — not investment advice.<br/>
-  Built by Freedom United Works &middot; v1.14.0
+  <strong>Not financial advice.</strong> VIGIL Trust Score is informational only. Scores may change as new data becomes available.<br/>
+  Past performance does not guarantee future results. Always do your own research.<br/>
+  Built by Freedom United Works &middot; v1.15.0 &middot; <a href="/privacy">Privacy Policy</a>
 </div>
 
 </div>

@@ -1,92 +1,149 @@
-# VIGIL Viral Thread — Ready to Post
+# VIGIL Viral Thread v2 — Verified Live Data (April 12, 2026)
 
-## Thread (Twitter/X)
+## Full Thread (12 tweets)
 
 **1/**
-We scored Polymarket's top 10 most profitable wallets through VIGIL's 6-dimension trust engine.
+We scored Polymarket's top 10 most profitable wallets through VIGIL's trust engine.
 
-7 out of 10 scored F.
+6 scored F. Only 1 scored above C.
 
-Here's what that means for everyone blindly copy-trading "whales." 🧵
+The leaderboard ranks by PnL. We rank by skill.
+
+Here's what we found. @Polymarket @VitalikButerin 🧵
 
 **2/**
-Wallet #1: $6.4M total PnL. VIGIL Grade: D/43.
+#1 on the leaderboard: $6.4M PnL. Anonymous wallet. VIGIL Grade: D/46.
 
-2,000 trades across 440 markets. Zero resolved bets visible. Live Edge score of 86 — strong open positions.
+2,000 trades across 440 markets — but only 15 resolved bets.
 
-But zero calibration data. Zero proven track record. You're trusting vibes, not evidence.
+That means over 99% of this wallet's trades haven't settled. You're following unrealized gains, not proven skill.
 
 **3/**
-Wallet #3 "reachingthesky": Listed on Polymarket's leaderboard with $3.7M PnL.
+#2: HorizonSplendidView. $4M on the leaderboard.
 
-VIGIL live score: F/12. Only 65 trades. 10 resolved. Calibration: 17/100.
+VIGIL score: F/10. Actual PnL: -$9.3M. Win rate: 0%.
 
-The leaderboard shows lifetime PnL. VIGIL shows whether they actually know what they're doing.
+The leaderboard shows lifetime PnL including open positions. VIGIL shows the resolved truth. This wallet has lost nine million dollars.
 
 **4/**
-"Countryside" — $1.5M on the leaderboard.
+#3: reachingthesky. $3.7M on the leaderboard.
 
-VIGIL live score: F/26. 802 resolved bets. Calibration: 8/100.
+VIGIL score: F/12. Only 10 resolved bets out of 65 trades. Calibration: 17/100. Win rate: 0%.
 
-That means when this wallet says they're 80% confident, they're right about 30% of the time. That's not skill. That's noise with leverage.
+When this wallet says 80% confident, reality says otherwise. That's not alpha — that's noise.
 
 **5/**
-The best wallet in the top 10? "swisstony" — D/41.
+#9: Countryside. $1.6M on the leaderboard.
 
-960 resolved bets. 80/100 calibration. That's actually solid forecasting.
+VIGIL score: F/25. Actual PnL: -$40.4M. Win rate: 1%. Calibration: 6/100.
 
-But discipline and consistency pull the overall score down. Even the best on the leaderboard isn't a B.
+Forty million dollars in losses behind a leaderboard showing +$1.6M. This is why PnL alone is dangerous.
 
 **6/**
-Why does this matter?
+So who actually knows what they're doing?
 
-Copy-trading is the fastest-growing strategy on Polymarket. People follow "top wallets" thinking PnL = skill.
+#6: RN1. The only wallet in the top 10 to score B or higher.
 
-PnL can come from: leverage, timing luck, one massive bet, unrealized gains on open positions that haven't resolved.
+VIGIL grade: B/65. Brier score: 0.10. 856 resolved bets. Calibration: 58. Skill component: 66%.
 
-None of that is predictive skill.
+RN1 isn't the most profitable — but they're the most *skilled*.
 
 **7/**
-VIGIL scores 6 dimensions:
-- Calibration (25%) — are your confidence levels accurate?
-- Live Edge (25%) — are your open positions beating the market?
-- Profitability (15%) — actual P&L performance
-- Consistency (15%) — steady returns vs one lucky hit
-- Discipline (10%) — position sizing and risk management
-- Sample Size (10%) — enough bets to be statistically meaningful
+Here's the full leaderboard — PnL rank vs VIGIL grade:
+
+1. 0x4924 — D/46
+2. HorizonSplendidView — F/10
+3. reachingthesky — F/12
+4. beachboy4 — F/29
+5. majorexploiter — F/22
+6. RN1 — B/65 ✓
+7. sovereign2013 — D/42
+8. 0x2A2C — C/59
+9. Countryside — F/25
+10. swisstony — F/30
 
 **8/**
-We built a CLOB Resolution Engine that reconstructs outcomes from Polymarket's order book when the standard API purges old position data.
+How VIGIL scores:
 
-Most scoring tools can't even see whether a bet won or lost. VIGIL can.
+Calibration (25%) — do your confidence levels match outcomes?
+Live Edge (25%) — are open positions beating the market?
+Profitability (15%) — actual P&L
+Consistency (15%) — steady returns or one lucky hit?
+Discipline (10%) — position sizing and risk management
+Sample Size (10%) — enough bets to be meaningful
 
 **9/**
-Score any Polymarket wallet right now — free, no signup:
+We built a CLOB Resolution Engine that reconstructs bet outcomes from Polymarket's order book — even after the standard API purges old position data.
+
+Most tools can't tell if a bet won or lost. VIGIL can.
+
+**10/**
+Every score includes a confidence interval:
+
+±3 for 200+ resolved bets (high confidence)
+±8 for 50-199 (medium)
+±15 for 20-49 (low)
+±25 for under 20 (very low)
+
+We tell you exactly how much to trust the score itself.
+
+**11/**
+Score any Polymarket wallet — free, no signup:
 
 https://vigil-trust-api.onrender.com
 
-Compare two wallets head-to-head:
-https://vigil-trust-api.onrender.com/polymarket/compare
+Chrome extension now in review — trust badges directly on Polymarket profiles.
 
-Chrome extension coming this week — see trust scores directly on Polymarket profiles.
+API access for builders: https://vigil-trust-api.onrender.com/pricing
 
-**10/**
-The prediction market is about to be a $50B+ industry.
+cc @coinaborist @raborist @theaborist @rektcapital @CoinDesk @Cointelegraph @theaborist
 
-Right now there's no trust layer. No way to separate signal from noise.
+**12/**
+Prediction markets are projected to be a $50B+ industry.
 
-VIGIL is building that layer.
+Right now there's no trust layer. No way to separate signal from noise. Copy-traders are following wallets that are down $40M behind a leaderboard showing gains.
 
-If you trade on Polymarket, you deserve to know who you're following.
+VIGIL is building the trust layer.
+
+#Polymarket #PredictionMarkets #DeFi #Crypto #Web3
 
 ---
 
-## Shorter version (single post / quote tweet):
+## Single Post Version (for quote tweets):
 
 We scored Polymarket's top 10 wallets by PnL through VIGIL's trust engine.
 
-7 out of 10 scored F.
+6 out of 10 scored F. The "best" wallets include one that's actually down $40M.
 
-The leaderboard rewards PnL. VIGIL rewards skill.
+Only 1 wallet scored B or above.
 
 Score any wallet free: https://vigil-trust-api.onrender.com
+
+@Polymarket #PredictionMarkets
+
+---
+
+## Verified Data Points (all pulled live April 12, 2026):
+
+| Rank | Name | Leaderboard PnL | VIGIL PnL | Grade | Score | Resolved | Calibration | Win Rate |
+|------|------|-----------------|-----------|-------|-------|----------|-------------|----------|
+| 1 | 0x4924...3782 | $6.4M | -$13K | D | 46 | 15 | 0 | 0% |
+| 2 | HorizonSplendidView | $4.0M | -$9.3M | F | 10 | 20 | 0 | 0% |
+| 3 | reachingthesky | $3.7M | -$3.1M | F | 12 | 10 | 17 | 0% |
+| 4 | beachboy4 | $3.2M | $174K | F | 29 | 27 | 34 | 22% |
+| 5 | majorexploiter | $2.4M | $0 | F | 22 | 0 | 0 | 0% |
+| 6 | RN1 | $2.2M | $18K | B | 65 | 856 | 58 | 15% |
+| 7 | sovereign2013 | $1.8M | $16K | D | 42 | 35 | 0 | 3% |
+| 8 | 0x2A2C...9Bc1 | $1.8M | -$3.7M | C | 59 | 254 | 31 | 17% |
+| 9 | Countryside | $1.6M | -$40.4M | F | 25 | 798 | 6 | 1% |
+| 10 | swisstony | $1.3M | -$1.2M | F | 30 | 914 | 50 | 23% |
+
+Grade scale: A (80+), B (65-79), C (50-64), D (35-49), F (0-34)
+
+## Posting Notes:
+
+- Best time: Tuesday-Thursday, 9-11 AM EST
+- Tag @Polymarket in tweet 1 for visibility
+- The Countryside $40M loss vs $1.6M leaderboard stat is the strongest hook — use it everywhere
+- RN1 as the lone B-grade wallet creates a narrative arc (villain → hero)
+- Confidence intervals in tweet 10 show methodological rigor — important for credibility
