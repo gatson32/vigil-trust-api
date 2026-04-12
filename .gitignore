@@ -1,2 +1,11 @@
 node_modules/
 package-lock.json
+dist/
+.DS_Store
+*.bak
+*.zip
+*.log
+.env
+.env.*
+vigil-trust-report.json
+threat-briefs/
