@@ -2915,19 +2915,18 @@ async function runPrescoringCron(): Promise<void> {
 }
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable later)
-// Polymarket Top 10 by All-Time PnL — live VIGIL scores (2026-04-11)
 // Polymarket Top 10 by All-Time PnL — live VIGIL v1.17.0 scores (2026-04-12)
 const TOP_WALLETS = [
-  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D', score: 47, resolved: 11, calibration: 0 },
-  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 7, resolved: 20, calibration: 0 },
-  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 6, resolved: 10, calibration: 0 },
-  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'F', score: 23, resolved: 24, calibration: 0 },
-  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 22, resolved: 0, calibration: 0 },
-  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 49, resolved: 856, calibration: 0 },
-  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 40, resolved: 64, calibration: 0 },
-  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 45, resolved: 242, calibration: 0 },
-  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'F', score: 21, resolved: 796, calibration: 0 },
-  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 19, resolved: 924, calibration: 0 },
+  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D' as const, score: 47, resolved: 11, calibration: 0 },
+  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F' as const, score: 32, resolved: 20, calibration: 0 },
+  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F' as const, score: 16, resolved: 10, calibration: 0 },
+  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D' as const, score: 35, resolved: 24, calibration: 0 },
+  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F' as const, score: 22, resolved: 0, calibration: 0 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D' as const, score: 44, resolved: 902, calibration: 0 },
+  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D' as const, score: 44, resolved: 92, calibration: 0 },
+  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D' as const, score: 47, resolved: 242, calibration: 0 },
+  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D' as const, score: 46, resolved: 796, calibration: 0 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F' as const, score: 19, resolved: 935, calibration: 0 },
 ];
 
 // Seed username cache from leaderboard on startup
