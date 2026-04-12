@@ -19,11 +19,11 @@ We ran the top 10 most profitable wallets on the Polymarket leaderboard through 
 | 3 | reachingthesky | $3.7M | F | 16 | -41% | 10 | 0% |
 | 4 | beachboy4 | $3.2M | D | 35 | -77% | 24 | 17% |
 | 5 | majorexploiter | $2.4M | F | 22 | -100% | 0 | 0% |
-| 6 | RN1 | $2.2M | D | 44 | -149% | 902 | 16% |
-| 7 | sovereign2013 | $1.8M | D | 44 | -19% | 92 | 50% |
-| 8 | 0x2A2C...9Bc1 | $1.8M | D | 47 | -180% | 242 | 14% |
-| 9 | Countryside | $1.6M | D | 46 | -9339% | 796 | 0% |
-| 10 | swisstony | $1.3M | F | 19 | -47% | 935 | 26% |
+| 6 | RN1 | $2.2M | D | 41 | -151% | 901 | 16% |
+| 7 | sovereign2013 | $1.8M | D | 48 | -12% | 164 | 50% |
+| 8 | 0x2A2C...9Bc1 | $1.8M | D | 46 | -180% | 246 | 14% |
+| 9 | Countryside | $1.6M | D | 46 | -9314% | 794 | 0% |
+| 10 | swisstony | $1.3M | F | 32 | -46% | 928 | 26% |
 
 **BSS = Brier Skill Score.** Positive means better than naive guessing. Negative means worse. 9 of 10 wallets are negative — only HorizonSplendidView squeaks past at +13% on just 20 resolved bets.
 
@@ -31,7 +31,7 @@ We ran the top 10 most profitable wallets on the Polymarket leaderboard through 
 
 Countryside shows $1.6M on the leaderboard. VIGIL computes -$40.4M in actual resolved losses. 0% win rate. BSS of -9,339% — meaning they perform 93x worse than a strategy that just predicts the historical base rate.
 
-swisstony has the most data — 935 resolved bets. When they bet at 70% confidence, the event happens 7.5% of the time. That's not overconfidence. That's anti-skill.
+swisstony has the most data — 928 resolved bets. When they bet at 70% confidence, the event happens 7.5% of the time. That's not overconfidence. That's anti-skill.
 
 The #1 wallet has $6.4M on the leaderboard but only 11 resolved bets out of 2,000 trades. Over 99% of their positions haven't settled.
 
@@ -68,7 +68,7 @@ We scored the top 10 most profitable wallets on Polymarket. Not a single one sco
 
 The most dramatic case: a wallet showing $1.6M on the leaderboard has -$40.4M in resolved losses, a 0% win rate, and a Brier Skill Score of -9,339%.
 
-The wallet with the most data (935 resolved bets) scored F/19. When they bet at 70% confidence, it happens 7.5% of the time.
+The wallet with the most data (928 resolved bets) scored F/32. When they bet at 70% confidence, it happens 7.5% of the time.
 
 **Why this matters:** Copy-traders are following these wallets with real money, assuming PnL = skill. It doesn't. Until now, there was no tool that checked.
 

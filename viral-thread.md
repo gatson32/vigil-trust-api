@@ -42,7 +42,7 @@ The leaderboard shows lifetime PnL including open positions. VIGIL shows truth.
 **6/**
 The "best" wallets in the top 10? 0x4924, 0x2A2C, and Countryside — all tied around D/47. And Countryside is sitting on -$40M in realized losses.
 
-The most data-rich wallet? swisstony — 935 resolved bets. Grade: F/19. When they say 70% confident, the event happens 7.5% of the time.
+The most data-rich wallet? swisstony — 928 resolved bets. Grade: F/32. When they say 70% confident, the event happens 7.5% of the time.
 
 **7/**
 Full leaderboard — PnL rank vs VIGIL grade:
@@ -52,11 +52,11 @@ Full leaderboard — PnL rank vs VIGIL grade:
 3. reachingthesky — F/16
 4. beachboy4 — D/35
 5. majorexploiter — F/22
-6. RN1 — D/44
-7. sovereign2013 — D/44
-8. 0x2A2C — D/47
+6. RN1 — D/41
+7. sovereign2013 — D/48
+8. 0x2A2C — D/46
 9. Countryside — D/46
-10. swisstony — F/19
+10. swisstony — F/32
 
 0 A's. 0 B's. 0 C's.
 
@@ -126,11 +126,11 @@ Score any wallet free: https://vigil-trust-api.onrender.com
 | 3 | reachingthesky | $3.7M | -$3.1M | F | 16 | 10 | -41% | 0.353 | 0% |
 | 4 | beachboy4 | $3.2M | $174K | D | 35 | 24 | -77% | 0.246 | 17% |
 | 5 | majorexploiter | $2.4M | $0 | F | 22 | 0 | -100% | 1.000 | 0% |
-| 6 | RN1 | $2.2M | -$59K | D | 44 | 902 | -149% | 0.327 | 16% |
-| 7 | sovereign2013 | $1.8M | $40K | D | 44 | 92 | -19% | 0.296 | 50% |
-| 8 | 0x2A2C...9Bc1 | $1.8M | -$2.6M | D | 47 | 242 | -180% | 0.338 | 14% |
-| 9 | Countryside | $1.6M | -$40.4M | D | 46 | 796 | -9339% | 0.237 | 0% |
-| 10 | swisstony | $1.3M | -$1.3M | F | 19 | 935 | -47% | 0.289 | 26% |
+| 6 | RN1 | $2.2M | -$59K | D | 41 | 901 | -151% | 0.335 | 16% |
+| 7 | sovereign2013 | $1.8M | $40K | D | 48 | 164 | -12% | 0.279 | 50% |
+| 8 | 0x2A2C...9Bc1 | $1.8M | -$2.6M | D | 46 | 246 | -180% | 0.334 | 14% |
+| 9 | Countryside | $1.6M | -$40.4M | D | 46 | 794 | -9314% | 0.236 | 0% |
+| 10 | swisstony | $1.3M | -$1.3M | F | 32 | 928 | -46% | 0.290 | 26% |
 
 Grade scale: A (80+), B (65-79), C (50-64), D (35-49), F (0-34)
 BSS = Brier Skill Score (positive = better than naive, negative = worse)

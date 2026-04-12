@@ -1814,7 +1814,10 @@ app.get('/degenclaw', async (_req, res) => {
 // ============================================================
 
 // JSON API: score a Polymarket trader by wallet
-app.get('/v1/polymarket/:wallet', async (req, res) => {
+// IMPORTANT: Guard against reserved sub-route names that would be caught by :wallet
+app.get('/v1/polymarket/:wallet', async (req, res, next) => {
+  const reserved = ['compare', 'search', 'recent'];
+  if (reserved.includes(req.params.wallet)) return next();
   try {
     const wallet = String(req.params.wallet || '').trim();
     if (!wallet || !wallet.startsWith('0x')) {
@@ -1884,7 +1887,8 @@ app.get('/v1/polymarket/search', (req, res) => {
 });
 
 // HTML score card for a Polymarket trader
-app.get('/polymarket/:wallet', async (req, res) => {
+app.get('/polymarket/:wallet', async (req, res, next) => {
+  if (['compare', 'search'].includes(req.params.wallet)) return next();
   let wallet = String(req.params.wallet || '').trim();
 
   // If not a wallet address, try username resolution
@@ -2943,11 +2947,11 @@ const TOP_WALLETS: Array<{ wallet: string; name: string; pnl: number; grade: str
   { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 16, resolved: 10, calibration: 0 },
   { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D', score: 35, resolved: 24, calibration: 0 },
   { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 22, resolved: 0, calibration: 0 },
-  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 44, resolved: 902, calibration: 0 },
-  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 44, resolved: 92, calibration: 0 },
-  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 47, resolved: 242, calibration: 0 },
-  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D', score: 46, resolved: 796, calibration: 0 },
-  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 19, resolved: 935, calibration: 0 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 41, resolved: 901, calibration: 0 },
+  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 48, resolved: 164, calibration: 0 },
+  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 46, resolved: 246, calibration: 0 },
+  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D', score: 46, resolved: 794, calibration: 0 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 32, resolved: 928, calibration: 0 },
 ];
 
 // Seed username cache from leaderboard on startup

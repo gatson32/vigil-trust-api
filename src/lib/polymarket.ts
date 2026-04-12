@@ -824,7 +824,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   const wins = resolvedBets.filter(b => b.correct).length;
   const winRate = resolvedBets.length > 0 ? wins / resolvedBets.length : 0;
 
-  // --- DIMENSION 1: CALIBRATION (30%) ---
+  // --- DIMENSION 1: CALIBRATION (25%) ---
   // v1.17.0: Combine calibration error (60%) with resolution (40%)
   // Resolution rewards wallets that make genuine forecasts diverging from base rate.
   // A wallet with perfect calibration but no resolution is just predicting the average.
@@ -839,12 +839,12 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     calibrationDim = calScore * 0.6 + resScore * 0.4;
   }
 
-  // --- DIMENSION 2: PROFITABILITY (20%) ---
+  // --- DIMENSION 2: PROFITABILITY (15%) ---
   const roi = totalVolume > 0 ? totalPnl / totalVolume : 0;
   // ROI from -100% to +100% mapped to 0-100
   const profitabilityDim = Math.max(0, Math.min(100, (roi + 0.5) * 100));
 
-  // --- DIMENSION 3: CONSISTENCY (20%) ---
+  // --- DIMENSION 3: CONSISTENCY (15%) ---
   // How stable are the per-bet returns?
   let consistencyDim: number;
   if (resolvedBets.length >= 5) {
@@ -859,7 +859,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     consistencyDim = 10; // thin data penalty
   }
 
-  // --- DIMENSION 4: DISCIPLINE (15%) ---
+  // --- DIMENSION 4: DISCIPLINE (10%) ---
   // Diversification across markets + reasonable position sizing
   const marketDiv = Math.min(100, uniqueMarkets * 3); // 33+ markets = full marks
   // Check for concentration: largest position as % of total
