@@ -400,6 +400,11 @@ function formatAgentResponse(agent: ScoredAgent) {
 //  ROUTES
 // ============================================================
 
+// --- Google Site Verification ---
+app.get('/google3752379bc7fac689.html', (_req, res) => {
+  res.type('html').send('google-site-verification: google3752379bc7fac689.html');
+});
+
 // --- Homepage ---
 app.get('/', (_req, res) => {
   res.type('html').send(renderHomepage());
