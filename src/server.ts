@@ -3170,8 +3170,11 @@ async function runPrescoringCron(): Promise<void> {
         // Update TOP_WALLETS entry with fresh data
         wallet.grade = report.trustGrade;
         wallet.score = report.trustScore;
+        wallet.resolved = report.raw.resolvedBets;
+        wallet.calibration = Math.round(report.calibrationReport.calibrationError * 1000) / 10; // as percentage e.g. 12.3
+        if (report.displayName && !report.displayName.startsWith('0x')) wallet.name = report.displayName;
 
-        console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore}`);
+        console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore} cal=${wallet.calibration}%`);
       }
     } catch (err) {
       console.error(`[CRON] Failed to pre-score ${wallet.name} (${wallet.wallet}):`, (err as Error).message);
@@ -3218,7 +3221,7 @@ function renderHomepage(): string {
 <td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
 <td><span style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${w.grade}</span></td>
 <td style="color:#fff;font-weight:600">${w.score}</td>
-<td>${w.calibration > 0 ? w.calibration : '<span style="color:#444">—</span>'}</td>
+<td style="color:#e8e8e8">${w.calibration > 0 ? w.calibration.toFixed(1) + '%' : '<span style="color:#444">—</span>'}</td>
 <td style="color:#707070">${w.resolved}</td>
 </tr>`;
   }).join('');
@@ -3506,7 +3509,7 @@ ${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-b
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">PnL</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Grade</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Score</th>
-    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Cal.</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Cal Error</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Resolved</th>
   </tr>
   ${leaderboardRows}
