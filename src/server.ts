@@ -2407,14 +2407,6 @@ app.get('/v1', (_req, res) => {
   });
 });
 
-// --- 404 handler ---
-app.use((_req, res) => {
-  res.status(404).json({
-    error: 'Not found',
-    message: 'Unknown endpoint. See GET /v1 for documentation.',
-  });
-});
-
 // ============================================================
 //  API KEY MANAGEMENT ENDPOINTS
 // ============================================================
@@ -2653,6 +2645,14 @@ app.get('/telegram/setup', async (req, res) => {
     body: JSON.stringify({ url: webhookUrl }),
   }).then(r => r.json());
   res.json({ webhookUrl, result });
+});
+
+// --- 404 handler (must be last route) ---
+app.use((_req, res) => {
+  res.status(404).json({
+    error: 'Not found',
+    message: 'Unknown endpoint. See GET /v1 for documentation.',
+  });
 });
 
 // --- Start server ---
