@@ -214,6 +214,10 @@ const leaderboardCache = new TTLCache<unknown>(300);   // 5 min
 const scoreCache = new TTLCache<unknown>(120);         // 2 min
 const ecosystemCache = new TTLCache<unknown>(300);     // 5 min
 
+// Prescore cache: stores full PolymarketRiskReport keyed by wallet address
+// Structure: { wallet: PolymarketRiskReport & { cachedAt: number } }
+const prescoredCache = new Map<string, any>();
+
 // Circuit breaker state for upstream Virtuals API
 let upstreamHealthy = true;
 let upstreamFailCount = 0;
@@ -420,6 +424,7 @@ app.get('/v1/health', async (_req, res) => {
       leaderboard: leaderboardCache.size,
       scores: scoreCache.size,
       ecosystem: ecosystemCache.size,
+      prescore: prescoredCache.size,
     },
     rateLimit: {
       windowMs: RATE_LIMIT_WINDOW_MS,
@@ -1766,10 +1771,28 @@ app.get('/v1/polymarket/:wallet', async (req, res) => {
     if (!wallet || !wallet.startsWith('0x')) {
       return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
     }
+
+    // Check prescore cache first — 2 hour TTL
+    const walletLower = wallet.toLowerCase();
+    const cached = prescoredCache.get(walletLower);
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    if (cached && (Date.now() - cached.cachedAt) < TWO_HOURS_MS) {
+      const { cachedAt, ...report } = cached;
+      return res.json({ ...report, cached: true, cachedAt });
+    }
+
+    // Not cached or expired — score normally
     const report = await scorePolymarketTrader(wallet);
     if (!report) {
       return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
     }
+
+    // Update prescore cache
+    prescoredCache.set(walletLower, {
+      ...report,
+      cachedAt: Date.now(),
+    });
+
     addRecentScore(report);
     return res.json(report);
   } catch (err) {
@@ -2682,7 +2705,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║       VIGIL Trust Score API v1.13.0              ║
+║       VIGIL Trust Score API v1.14.0              ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
@@ -2692,6 +2715,11 @@ async function start() {
 ║  Rate Limit: ${RATE_LIMIT_MAX} req/min per IP             ║
 ╚══════════════════════════════════════════════════╝
     `);
+
+    // Schedule prescore cron: 30s after boot, then every hour
+    setTimeout(() => runPrescoringCron(), 30000);
+    setInterval(() => runPrescoringCron(), 3600000);
+    console.log('[BOOT] Prescore cron scheduled: 30s initial delay, then hourly');
   });
 
   // Start ACP evaluator listener in the background (optional, non-fatal)
@@ -2728,6 +2756,40 @@ function hEsc(s: string): string {
 
 function gradeColor(g: string): string {
   return g === 'A' ? '#10b981' : g === 'B' ? '#34d399' : g === 'C' ? '#eab308' : g === 'D' ? '#f97316' : '#ef4444';
+}
+
+// ============================================================
+//  PRESCORE CRON — Background scoring for popular wallets
+// ============================================================
+
+async function runPrescoringCron(): Promise<void> {
+  console.log(`[CRON] Starting pre-scoring run for ${TOP_WALLETS.length} popular wallets...`);
+
+  for (const wallet of TOP_WALLETS) {
+    try {
+      const report = await scorePolymarketTrader(wallet.wallet);
+      if (report) {
+        // Store in prescore cache with timestamp
+        prescoredCache.set(wallet.wallet.toLowerCase(), {
+          ...report,
+          cachedAt: Date.now(),
+        });
+
+        // Update TOP_WALLETS entry with fresh data
+        wallet.grade = report.trustGrade;
+        wallet.score = report.trustScore;
+
+        console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore}`);
+      }
+    } catch (err) {
+      console.error(`[CRON] Failed to pre-score ${wallet.name} (${wallet.wallet}):`, (err as Error).message);
+    }
+
+    // 3-second delay between wallets to avoid hammering upstream
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  console.log(`[CRON] Pre-scoring complete. Cached ${prescoredCache.size} wallets.`);
 }
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable later)
@@ -2786,8 +2848,8 @@ function renderHomepage(): string {
   }).join('');
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VIGIL — Trust Scores for AI Agents &amp; Prediction Markets</title>
-<meta name="description" content="The first on-chain credit bureau for AI trading agents and prediction market traders. Calibration scoring, on-chain verification, skill vs luck decomposition.">
+<title>VIGIL — Trust Scores for Polymarket Traders</title>
+<meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.7}
@@ -2860,20 +2922,13 @@ table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:backgroun
 function doSearch(e) {
   e.preventDefault();
   var q = document.getElementById('q').value.trim();
-  var v = document.getElementById('vertical').value;
   if (!q) return;
   // Show loading state
   var btn = e.target.querySelector('button');
   btn.innerHTML = '<span class="spinner"></span> Scoring...';
   btn.disabled = true;
-  if (v === 'polymarket') {
-    if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
-    else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
-  } else if (v === 'degenclaw') {
-    window.location.href = '/degenclaw/' + encodeURIComponent(q);
-  } else if (v === 'onchain') {
-    window.location.href = '/v1/onchain/' + encodeURIComponent(q);
-  }
+  if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
+  else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
 }
 </script>
 </head><body>
@@ -2883,46 +2938,42 @@ function doSearch(e) {
   <div class="logo"><span>V</span>IGIL</div>
   <div class="nav-links">
     <a href="/polymarket">Polymarket</a>
-    <a href="/v1/health">API Health</a>
-    <a href="/v1">API Docs</a>
+    <a href="/polymarket/compare">Compare</a>
+    <a href="/api/pricing">API Pricing</a>
+    <a href="/v1">Docs</a>
   </div>
 </div>
 
 <div class="hero">
-  <h1>Trust Scores for <em>AI Agents</em> &amp; <em>Prediction Markets</em></h1>
-  <p>Before you copy a trader, check if they're actually skilled — or just lucky. Paste any Polymarket wallet. We'll score their calibration, verify on-chain, and tell you if their edge is real.</p>
+  <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
+  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. 7 of Polymarket's top 10 most profitable wallets scored F on VIGIL.</p>
 </div>
 
 <div class="search-box">
   <form onsubmit="doSearch(event)">
-    <select id="vertical">
-      <option value="polymarket">Polymarket Wallet</option>
-      <option value="degenclaw">DegenClaw Agent</option>
-      <option value="onchain">On-Chain Lookup</option>
-    </select>
-    <input type="text" id="q" placeholder="Wallet address (0x...) or username (e.g. swisstony)" autocomplete="off" />
+    <input type="text" id="q" placeholder="Wallet address (0x...) or username" autocomplete="off" />
     <button type="submit">Score</button>
   </form>
 </div>
 
 <div class="cards">
   <div class="card">
-    <h3>Polymarket Traders</h3>
-    <p>Calibration scoring for prediction market traders. Brier scores, overconfidence detection, skill vs. luck decomposition. Does this trader actually know what's going to happen?</p>
+    <h3>Score Any Wallet</h3>
+    <p>Paste a wallet address or username. Get a 6-dimension trust score in seconds. Calibration, live edge, profitability, consistency, discipline, sample size.</p>
     <span class="tag live">LIVE</span>
     <span class="tag chain">Polygon</span>
   </div>
   <div class="card">
-    <h3>DegenClaw AI Agents</h3>
-    <p>Trust scores for autonomous trading agents on Virtuals Protocol. Five-dimension risk analysis with historical grade snapshots every 6 hours.</p>
+    <h3>Compare Head-to-Head</h3>
+    <p>Put two wallets side by side. See who's actually better across every dimension. Link: /polymarket/compare</p>
     <span class="tag live">LIVE</span>
-    <span class="tag chain">Base</span>
+    <span class="tag chain">Polygon</span>
   </div>
   <div class="card">
-    <h3>On-Chain Verification</h3>
-    <p>Wallet provenance scoring from Basescan. Age, transaction history, counterparty diversity, USDC flow cross-checks, protocol fingerprinting, sybil detection.</p>
-    <span class="tag live">LIVE</span>
-    <span class="tag chain">Base + Polygon</span>
+    <h3>Chrome Extension</h3>
+    <p>See trust score badges directly on Polymarket profile pages. Coming soon to the Chrome Web Store.</p>
+    <span class="tag live">COMING SOON</span>
+    <span class="tag chain">Browser</span>
   </div>
 </div>
 
@@ -2969,27 +3020,28 @@ ${recentRows.length > 0 ? `<div class="card">
 </div>
 
 <div class="dims">
-  <div class="dim"><div class="pct">30%</div><div class="label">Calibration</div></div>
-  <div class="dim"><div class="pct">20%</div><div class="label">Profitability</div></div>
-  <div class="dim"><div class="pct">20%</div><div class="label">Consistency</div></div>
-  <div class="dim"><div class="pct">15%</div><div class="label">Discipline</div></div>
-  <div class="dim"><div class="pct">15%</div><div class="label">Sample Size</div></div>
+  <div class="dim"><div class="pct">25%</div><div class="label">Calibration</div></div>
+  <div class="dim"><div class="pct">25%</div><div class="label">Live Edge</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Profitability</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Consistency</div></div>
+  <div class="dim"><div class="pct">10%</div><div class="label">Discipline</div></div>
+  <div class="dim"><div class="pct">10%</div><div class="label">Sample Size</div></div>
 </div>
 
 <div class="api-sec">
   <h2>API Endpoints</h2>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/compare</span></div><span class="desc">Compare two wallets head-to-head</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet</span></div><span class="desc">On-chain wallet provenance (Base + Polygon)</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet/sybil</span></div><span class="desc">Quick sybil detection check</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/score/:identifier</span></div><span class="desc">Trust score for a Virtuals Protocol agent</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/leaderboard</span></div><span class="desc">Paginated agent rankings</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/api/pricing</span></div><span class="desc">API pricing and rate limits</span></div>
+  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/api/keys/create</span></div><span class="desc">Create API key for programmatic access</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/health</span></div><span class="desc">Service health + system status</span></div>
 </div>
 
 <div class="foot">
   VIGIL Trust Score is informational only — not investment advice.<br/>
-  Built by Freedom United Works &middot; v1.13.0
+  Built by Freedom United Works &middot; v1.14.0
 </div>
 
 </div>

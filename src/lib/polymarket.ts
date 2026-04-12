@@ -112,6 +112,14 @@ export interface PolymarketRiskReport {
   trustGrade: 'A' | 'B' | 'C' | 'D' | 'F';
   trustTier: 'SHARP' | 'SOLID' | 'DEVELOPING' | 'RISKY' | 'DANGER' | 'UNPROVEN';
 
+  // Confidence intervals
+  confidence: {
+    level: 'high' | 'medium' | 'low' | 'very_low';
+    margin: number;        // ± points
+    resolvedBets: number;  // how many resolved bets the score is based on
+    description: string;   // human-readable, e.g. "D/41 ± 3 (high confidence)"
+  };
+
   // Calibration deep-dive (the secret sauce)
   calibrationReport: CalibrationReport;
 
@@ -918,6 +926,26 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     `Skill decomposition: ${calibrationReport.skillDecomposition.skill.toFixed(0)}% skill, ${calibrationReport.skillDecomposition.luck.toFixed(0)}% luck.`,
   );
 
+  // --- CONFIDENCE INTERVALS ---
+  let confidenceLevel: 'high' | 'medium' | 'low' | 'very_low';
+  let confidenceMargin: number;
+
+  if (resolvedBets.length >= 200) {
+    confidenceLevel = 'high';
+    confidenceMargin = 3;
+  } else if (resolvedBets.length >= 50) {
+    confidenceLevel = 'medium';
+    confidenceMargin = 8;
+  } else if (resolvedBets.length >= 20) {
+    confidenceLevel = 'low';
+    confidenceMargin = 15;
+  } else {
+    confidenceLevel = 'very_low';
+    confidenceMargin = 25;
+  }
+
+  const confidenceDescription = `${trustGrade}/${gatedScore} ± ${confidenceMargin} (${confidenceLevel} confidence, ${resolvedBets.length} resolved bets)`;
+
   // Identity
   const firstName = trades[0]?.name || trades[0]?.pseudonym || '';
   const pseudonym = trades[0]?.pseudonym || '';
@@ -946,6 +974,12 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     trustScore: gatedScore,
     trustGrade,
     trustTier,
+    confidence: {
+      level: confidenceLevel,
+      margin: confidenceMargin,
+      resolvedBets: resolvedBets.length,
+      description: confidenceDescription,
+    },
     calibrationReport,
     onChain: onChainBlock,
     reasoning,
