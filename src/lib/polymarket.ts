@@ -7,6 +7,7 @@
 //   basescan (etherscan v2)  — on-chain verification layer
 
 import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
+import { query } from './db.js';
 
 const USER_AGENT = 'VIGIL-Trust/1.18.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
@@ -1390,6 +1391,19 @@ export async function buildSkillLeaderboard(
         realizedPnl: report.raw.realizedPnl,
         scoredAt: report.scoredAt,
       });
+
+      // Alert on A or B grade discoveries — log to DB
+      if (report.trustGrade === 'A' || report.trustGrade === 'B') {
+        console.log(`[VIGIL ALERT] 🎯 ${report.trustGrade}-grade wallet discovered: ${report.displayName} (${report.trustGrade}/${report.trustScore})`);
+        try {
+          await query(
+            'INSERT INTO discovery_alerts (wallet, display_name, trust_grade, trust_score, brier_skill, resolved_bets) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING',
+            [report.wallet, report.displayName, report.trustGrade, report.trustScore, report.calibrationReport.brierSkillScore, report.raw.resolvedBets],
+          );
+        } catch (err) {
+          console.error('[VIGIL ALERT] Failed to save alert:', err);
+        }
+      }
 
       scored++;
 

@@ -19,7 +19,7 @@ import {
   getHistoryStats,
   getRecentMovers,
 } from './lib/history.js';
-import { initDb, closeDb, isDbConnected } from './lib/db.js';
+import { initDb, closeDb, isDbConnected, query } from './lib/db.js';
 import { assessAgent, type SentinelVerdict, type SentinelContext } from './lib/sentinel.js';
 import { startEvaluatorListener } from './lib/evaluator.js';
 import {
@@ -463,7 +463,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.17.0',
+    version: '1.18.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -2213,7 +2213,11 @@ app.get('/polymarket/leaderboard', (_req, res) => {
 
   let rows = '';
   if (leaderboard.length === 0) {
-    rows = `<tr><td colspan="7" style="text-align:center;padding:40px;color:#6b7280">No data yet. The discovery crawler runs periodically — check back soon.</td></tr>`;
+    rows = `<tr><td colspan="7" style="text-align:center;padding:48px;color:#9ca3af">
+      <div style="font-size:36px;margin-bottom:12px">🔍</div>
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px">Crawler is scanning...</div>
+      <div style="font-size:14px;color:#6b7280;max-width:400px;margin:0 auto">The discovery crawler is scanning resolved Polymarket markets to find skilled forecasters. It runs every 6 hours. Check back soon — or score any wallet now using the search above.</div>
+    </td></tr>`;
   } else {
     rows = leaderboard.slice(0, 100).map((e, i) => {
       const gc = gradeColor(e.trustGrade);
@@ -2224,10 +2228,11 @@ app.get('/polymarket/leaderboard', (_req, res) => {
         ? `<span style="color:#10b981">+${(e.brierSkillScore * 100).toFixed(0)}%</span>`
         : `<span style="color:#ef4444">${(e.brierSkillScore * 100).toFixed(0)}%</span>`;
       const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
-      return `<tr style="border-bottom:1px solid #1f2937">
+      const rowBg = i % 2 === 0 ? '' : 'background:#0d101666;';
+      return `<tr style="border-bottom:1px solid #1f2937;${rowBg}transition:background .15s" onmouseover="this.style.background='#1f293766'" onmouseout="this.style.background='${i % 2 === 0 ? '' : '#0d101666'}'">
         <td style="padding:10px 8px;color:#6b7280">${i + 1}</td>
-        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none">${pmEscape(name)}</a></td>
-        <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700">${e.trustGrade}/${e.trustScore}</span></td>
+        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none;font-weight:600">${pmEscape(name)}</a></td>
+        <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700;font-size:15px">${e.trustGrade}/${e.trustScore}</span></td>
         <td style="padding:10px 8px;text-align:center">${bss}</td>
         <td style="padding:10px 8px;text-align:center;color:#d1d5db">${(e.calibrationError * 100).toFixed(1)}%</td>
         <td style="padding:10px 8px;text-align:center;color:#d1d5db">${e.resolvedBets}</td>
@@ -2653,7 +2658,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.17.0',
+    version: '1.18.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -2972,21 +2977,39 @@ app.get('/telegram/setup', async (req, res) => {
 // ============================================================
 //  EMAIL CAPTURE ENDPOINT
 // ============================================================
-app.post('/subscribe', (req, res) => {
+app.post('/subscribe', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!email || !email.includes('@') || email.length < 5 || email.length > 200) {
     return res.status(400).json({ error: 'Valid email required' });
   }
   if (emailSubscribers.has(email)) {
-    return res.json({ success: true, message: 'Already subscribed' });
+    return res.json({ success: true, message: 'You\'re on the list! We\'ll alert you when an A-grade forecaster is discovered.' });
   }
   emailSubscribers.add(email);
-  console.log(`[SUBSCRIBE] New subscriber: ${email} (total: ${emailSubscribers.size})`);
-  res.json({ success: true, message: 'Subscribed! We\'ll notify you on launch updates.' });
+
+  // Persist to DB
+  try {
+    await query('INSERT INTO email_subscribers (email, alert_type) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING', [email, 'a_grade']);
+  } catch (err) {
+    console.error('[SUBSCRIBE] DB save failed:', err);
+  }
+
+  console.log(`[SUBSCRIBE] New A-grade alert subscriber: ${email} (total: ${emailSubscribers.size})`);
+  res.json({ success: true, message: 'You\'re on the list! We\'ll alert you when an A-grade forecaster is discovered.' });
 });
 
 app.get('/subscribe/count', (_req, res) => {
   res.json({ subscribers: emailSubscribers.size });
+});
+
+// Discovery alerts — recent A/B grade wallet finds
+app.get('/v1/polymarket/discover/alerts', async (_req, res) => {
+  try {
+    const result = await query('SELECT * FROM discovery_alerts ORDER BY discovered_at DESC LIMIT 50');
+    res.json({ alerts: result?.rows || [], total: result?.rowCount || 0 });
+  } catch (err) {
+    res.json({ alerts: [], total: 0 });
+  }
 });
 
 // --- 404 handler (must be last route) ---
@@ -3002,10 +3025,23 @@ async function start() {
   // Initialize database (graceful fallback to memory if unavailable)
   const dbConnected = await initDb();
 
+  // Load subscribers from DB into memory
+  if (dbConnected) {
+    try {
+      const subs = await query('SELECT email FROM email_subscribers');
+      if (subs?.rows) {
+        for (const row of subs.rows) emailSubscribers.add(row.email);
+        console.log(`[BOOT] Loaded ${emailSubscribers.size} email subscribers from DB`);
+      }
+    } catch (err) {
+      console.error('[BOOT] Failed to load subscribers:', err);
+    }
+  }
+
   app.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║       VIGIL Trust Score API v1.15.0              ║
+║       VIGIL Trust Score API v1.18.0              ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
@@ -3217,9 +3253,12 @@ a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
 .endpoint .path{color:#d1d5db}
 .endpoint .desc{color:#6b7280;font-size:12px}
 
-.foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:12px;color:#4b5563}
-table tr:hover td{background:#1f293744}
+.foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:13px;color:#6b7280;line-height:1.8}
+.foot a{color:#9ca3af}
+.foot strong{color:#9ca3af}
+table tr:hover td{background:#1f293766}
 table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:background .15s}
+table tr:nth-child(even) td{background:#0d101666}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ffffff40;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
 @media(max-width:640px){
@@ -3294,6 +3333,12 @@ function doSubscribe(e) {
 <div class="hero">
   <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
   <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D on VIGIL.</p>
+  <div style="display:flex;justify-content:center;gap:32px;margin-top:8px;flex-wrap:wrap">
+    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#a78bfa">600+</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Wallets Scanned</div></div>
+    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#ef4444">0</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">A-Grade Found</div></div>
+    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#3b82f6">1</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">B-Grade Found</div></div>
+    <div style="text-align:center"><div style="font-size:24px;font-weight:800;color:#10b981">500+</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Markets Crawled</div></div>
+  </div>
 </div>
 
 <div class="search-box">
@@ -3303,11 +3348,12 @@ function doSubscribe(e) {
   </form>
 </div>
 
-<div class="email-box" style="max-width:500px;margin:0 auto 40px;text-align:center">
-  <p style="font-size:13px;color:#6b7280;margin-bottom:10px">Get notified when we launch new features</p>
+<div style="max-width:560px;margin:0 auto 48px;text-align:center;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px 28px">
+  <div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:6px">We scanned 600+ wallets. Only 1 scored above C.</div>
+  <p style="font-size:13px;color:#9ca3af;margin-bottom:14px">Get alerted when VIGIL discovers the first A-grade forecaster on Polymarket.</p>
   <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
-    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:14px;outline:none" />
-    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Subscribe</button>
+    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:14px;outline:none" />
+    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Alert Me</button>
   </form>
   <div id="submsg" style="font-size:13px;margin-top:8px;color:#10b981;display:none"></div>
 </div>
@@ -3422,7 +3468,7 @@ ${recentRows.length > 0 ? `<div class="card">
 <div class="foot">
   <strong>Not financial advice.</strong> VIGIL Trust Score is informational only. Scores may change as new data becomes available.<br/>
   Past performance does not guarantee future results. Always do your own research.<br/>
-  Built by Freedom United Works &middot; v1.17.0 &middot; <a href="/privacy">Privacy Policy</a>
+  Built by Freedom United Works &middot; v1.18.0 &middot; <a href="/privacy">Privacy Policy</a>
 </div>
 
 </div>

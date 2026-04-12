@@ -223,6 +223,24 @@ async function runMigrations(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_agent_identity_canonical
       ON agent_identities (canonical_id);
+
+    CREATE TABLE IF NOT EXISTS email_subscribers (
+      id            SERIAL PRIMARY KEY,
+      email         TEXT NOT NULL UNIQUE,
+      subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      alert_type    TEXT NOT NULL DEFAULT 'a_grade'
+    );
+
+    CREATE TABLE IF NOT EXISTS discovery_alerts (
+      id            SERIAL PRIMARY KEY,
+      wallet        TEXT NOT NULL,
+      display_name  TEXT,
+      trust_grade   TEXT NOT NULL,
+      trust_score   INTEGER NOT NULL,
+      brier_skill   REAL,
+      resolved_bets INTEGER,
+      discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
 }
 
