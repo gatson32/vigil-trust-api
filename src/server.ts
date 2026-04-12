@@ -147,6 +147,68 @@ setInterval(() => {
 }, 300_000);
 
 // ============================================================
+//  API KEY SYSTEM — Paid tiers bypass rate limits
+// ============================================================
+
+interface ApiKeyRecord {
+  key: string;
+  tier: 'free' | 'starter' | 'pro' | 'enterprise';
+  owner: string;           // email
+  monthlyLimit: number;    // max requests per month
+  monthlyUsage: number;
+  ratePerMin: number;      // per-minute rate limit
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+const API_TIERS = {
+  free:       { monthlyLimit: 100,    ratePerMin: 10,    price: 0,   label: 'Free' },
+  starter:    { monthlyLimit: 1000,   ratePerMin: 30,    price: 29,  label: 'Starter — $29/mo' },
+  pro:        { monthlyLimit: 10000,  ratePerMin: 120,   price: 99,  label: 'Pro — $99/mo' },
+  enterprise: { monthlyLimit: 100000, ratePerMin: 600,   price: 499, label: 'Enterprise — $499/mo' },
+};
+
+// In-memory API key store (will move to DB later)
+const apiKeyStore = new Map<string, ApiKeyRecord>();
+
+function generateApiKey(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let key = 'vgl_';
+  for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
+  return key;
+}
+
+function validateApiKey(key: string): ApiKeyRecord | null {
+  const record = apiKeyStore.get(key);
+  if (!record) return null;
+  if (record.expiresAt && new Date(record.expiresAt) < new Date()) return null;
+  return record;
+}
+
+function getApiKeyRateLimit(key: string): { allowed: boolean; remaining: number } {
+  const record = apiKeyStore.get(key);
+  if (!record) return { allowed: false, remaining: 0 };
+
+  if (record.monthlyUsage >= record.monthlyLimit) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  record.monthlyUsage++;
+  return { allowed: true, remaining: record.monthlyLimit - record.monthlyUsage };
+}
+
+// Reset monthly usage on the 1st of each month
+setInterval(() => {
+  const now = new Date();
+  if (now.getDate() === 1 && now.getHours() === 0 && now.getMinutes() < 6) {
+    for (const record of apiKeyStore.values()) {
+      record.monthlyUsage = 0;
+    }
+    console.log('[API Keys] Monthly usage reset');
+  }
+}, 300_000); // check every 5 min
+
+// ============================================================
 //  CACHES
 // ============================================================
 
@@ -212,8 +274,32 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Rate limiting middleware
+// Rate limiting middleware — API key holders get elevated limits
 app.use((req, res, next) => {
+  const apiKey = req.headers['x-api-key'] as string || req.query.api_key as string;
+
+  // If valid API key, use its own rate limit
+  if (apiKey) {
+    const record = validateApiKey(apiKey);
+    if (record) {
+      const { allowed, remaining } = getApiKeyRateLimit(apiKey);
+      res.setHeader('X-RateLimit-Limit', record.monthlyLimit.toString());
+      res.setHeader('X-RateLimit-Remaining', remaining.toString());
+      res.setHeader('X-Api-Tier', record.tier);
+
+      if (!allowed) {
+        return res.status(429).json({
+          error: 'Monthly API limit exceeded',
+          message: `Your ${record.tier} plan allows ${record.monthlyLimit} requests/month. Upgrade at /v1/api/pricing`,
+          tier: record.tier,
+        });
+      }
+      return next();
+    }
+    // Invalid key — fall through to IP-based limiting
+  }
+
+  // Default IP-based rate limiting for unauthenticated requests
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const { allowed, remaining, resetAt } = getRateLimitInfo(ip);
 
@@ -224,7 +310,7 @@ app.use((req, res, next) => {
   if (!allowed) {
     return res.status(429).json({
       error: 'Rate limit exceeded',
-      message: `Maximum ${RATE_LIMIT_MAX} requests per minute. Try again shortly.`,
+      message: `Maximum ${RATE_LIMIT_MAX} requests per minute. Add an API key for higher limits. See /v1/api/pricing`,
       retryAfter: Math.ceil((resetAt - Date.now()) / 1000),
     });
   }
@@ -2329,6 +2415,246 @@ app.use((_req, res) => {
   });
 });
 
+// ============================================================
+//  API KEY MANAGEMENT ENDPOINTS
+// ============================================================
+
+// Pricing page (JSON)
+app.get('/v1/api/pricing', (_req, res) => {
+  res.json({
+    tiers: Object.entries(API_TIERS).map(([id, t]) => ({
+      id,
+      label: t.label,
+      price: t.price,
+      monthlyLimit: t.monthlyLimit,
+      ratePerMin: t.ratePerMin,
+      features: id === 'free'
+        ? ['100 scores/month', '10 req/min', 'Community support']
+        : id === 'starter'
+        ? ['1,000 scores/month', '30 req/min', 'Email support', 'Compare endpoint']
+        : id === 'pro'
+        ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
+        : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'],
+    })),
+    currency: 'USD',
+    billingCycle: 'monthly',
+    contact: 'api@vigiltrust.io',
+  });
+});
+
+// Pricing page (HTML)
+app.get('/api/pricing', (_req, res) => {
+  const tierCards = Object.entries(API_TIERS).map(([id, t]) => {
+    const features = id === 'free'
+      ? ['100 scores/month', '10 req/min', 'Community support']
+      : id === 'starter'
+      ? ['1,000 scores/month', '30 req/min', 'Email support', 'Compare endpoint']
+      : id === 'pro'
+      ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
+      : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'];
+
+    const popular = id === 'pro' ? `<div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;padding:2px 12px;border-radius:12px;font-size:11px;font-weight:700">MOST POPULAR</div>` : '';
+    const border = id === 'pro' ? 'border:2px solid #3b82f6;' : 'border:1px solid #1f2937;';
+
+    return `<div style="position:relative;background:#111827;${border}border-radius:16px;padding:24px;flex:1;min-width:220px">
+      ${popular}
+      <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:4px">${id.charAt(0).toUpperCase() + id.slice(1)}</h3>
+      <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#6b7280;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
+      <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#9ca3af;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
+      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1f2937;color:#9ca3af;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigiltrust.io?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
+    </div>`;
+  }).join('');
+
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL API Pricing</title></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px">
+<div style="max-width:1000px;margin:0 auto">
+  <div style="text-align:center;margin-bottom:40px">
+    <h1 style="font-size:32px;font-weight:800;letter-spacing:2px;margin-bottom:8px">VIGIL API</h1>
+    <p style="color:#6b7280;font-size:14px">Trust scores for prediction market wallets. Programmatic access.</p>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${tierCards}</div>
+  <div style="text-align:center;margin-top:40px">
+    <p style="color:#4b5563;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
+    <p style="color:#4b5563;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigiltrust.io" style="color:#3b82f6">api@vigiltrust.io</a></p>
+  </div>
+</div></body></html>`);
+});
+
+// Create API key (self-serve for free tier, manual approval for paid)
+app.get('/v1/api/keys/create', (req, res) => {
+  const tier = (req.query.tier as string) || 'free';
+  const email = req.query.email as string;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email required', usage: '/v1/api/keys/create?tier=free&email=you@example.com' });
+  }
+
+  if (tier !== 'free' && tier !== 'starter') {
+    return res.json({
+      message: `${tier} tier requires manual setup. Contact api@vigiltrust.io`,
+      tier,
+      pricing: API_TIERS[tier as keyof typeof API_TIERS],
+    });
+  }
+
+  const tierConfig = API_TIERS[tier as keyof typeof API_TIERS];
+  if (!tierConfig) {
+    return res.status(400).json({ error: 'Invalid tier', validTiers: Object.keys(API_TIERS) });
+  }
+
+  // Check if email already has a key
+  for (const record of apiKeyStore.values()) {
+    if (record.owner === email.toLowerCase()) {
+      return res.json({
+        message: 'You already have an API key. Contact api@vigiltrust.io if you need a new one.',
+        tier: record.tier,
+      });
+    }
+  }
+
+  const key = generateApiKey();
+  const record: ApiKeyRecord = {
+    key,
+    tier: tier as ApiKeyRecord['tier'],
+    owner: email.toLowerCase(),
+    monthlyLimit: tierConfig.monthlyLimit,
+    ratePerMin: tierConfig.ratePerMin,
+    monthlyUsage: 0,
+    createdAt: new Date().toISOString(),
+    expiresAt: null,
+  };
+  apiKeyStore.set(key, record);
+
+  res.json({
+    apiKey: key,
+    tier: record.tier,
+    monthlyLimit: record.monthlyLimit,
+    ratePerMin: record.ratePerMin,
+    usage: {
+      header: 'x-api-key: YOUR_KEY',
+      queryParam: '?api_key=YOUR_KEY',
+      example: `curl -H "x-api-key: ${key}" https://vigil-trust-api.onrender.com/v1/polymarket/0x...`,
+    },
+    warning: 'Save this key — it cannot be retrieved later.',
+  });
+});
+
+// Check API key usage
+app.get('/v1/api/keys/usage', (req, res) => {
+  const apiKey = req.headers['x-api-key'] as string || req.query.api_key as string;
+  if (!apiKey) {
+    return res.status(401).json({ error: 'Provide API key via x-api-key header or api_key query param' });
+  }
+
+  const record = validateApiKey(apiKey);
+  if (!record) {
+    return res.status(401).json({ error: 'Invalid or expired API key' });
+  }
+
+  res.json({
+    tier: record.tier,
+    owner: record.owner,
+    monthlyLimit: record.monthlyLimit,
+    monthlyUsage: record.monthlyUsage,
+    remaining: record.monthlyLimit - record.monthlyUsage,
+    ratePerMin: record.ratePerMin,
+    createdAt: record.createdAt,
+  });
+});
+
+// ── Telegram Bot Webhook ──────────────────────────────────────────────
+
+const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TG_API_BASE = TG_BOT_TOKEN ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : '';
+
+async function tgSend(chatId: number, text: string) {
+  if (!TG_API_BASE) return;
+  await fetch(`${TG_API_BASE}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+  });
+}
+
+function tgGradeEmoji(grade: string): string {
+  return ({ A: '🟢', B: '🔵', C: '🟡', D: '🟠', F: '🔴' } as Record<string, string>)[grade] || '⚪';
+}
+
+function tgPnl(pnl: number): string {
+  return pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
+}
+
+app.post('/telegram/webhook', async (req, res) => {
+  res.sendStatus(200); // ack immediately
+  if (!TG_BOT_TOKEN) return;
+
+  const msg = req.body?.message;
+  if (!msg?.text) return;
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+
+  try {
+    if (text.startsWith('/start') || text.startsWith('/help')) {
+      await tgSend(chatId, `<b>VIGIL Trust Score Bot</b>\n\nScore any Polymarket wallet's forecasting skill.\n\n<b>Commands:</b>\n/score &lt;wallet or username&gt;\n/compare &lt;wallet1&gt; &lt;wallet2&gt;\n/top — Leaderboard\n\n<b>Example:</b>\n<code>/score swisstony</code>\n\nPowered by <a href="https://vigil-trust-api.onrender.com">VIGIL</a>`);
+    } else if (text.startsWith('/score')) {
+      const input = text.replace(/^\/score\s*/, '').split(/\s+/)[0];
+      if (!input) { await tgSend(chatId, '⚠️ Usage: <code>/score &lt;wallet or username&gt;</code>'); return; }
+
+      await tgSend(chatId, `⏳ Scoring <code>${input.length > 20 ? input.slice(0, 8) + '...' + input.slice(-4) : input}</code>...`);
+
+      // Resolve username if needed
+      let wallet = input;
+      if (!wallet.startsWith('0x')) {
+        const resolved = resolveWalletIdentifier(wallet);
+        if (!resolved) { await tgSend(chatId, `❌ Username "${input}" not found. Try a wallet address.`); return; }
+        wallet = resolved;
+      }
+
+      const d = await scorePolymarketTrader(wallet);
+      if (!d) { await tgSend(chatId, '❌ No trading data found for this wallet.'); return; }
+
+      const name = d.displayName && !d.displayName.startsWith('0x') ? d.displayName.split('-')[0] : d.wallet.slice(0, 8) + '...' + d.wallet.slice(-4);
+      const flags = (d.flags || []).slice(0, 3).map((f: string) => `  ⚠️ ${f}`).join('\n');
+      const greens = (d.greenFlags || []).slice(0, 2).map((f: string) => `  ✅ ${f}`).join('\n');
+
+      await tgSend(chatId, `${tgGradeEmoji(d.trustGrade)} <b>VIGIL: ${d.trustGrade} / ${d.trustScore}</b>\n<b>${hEsc(name)}</b> — ${d.trustTier}\n\n📊 Cal: ${d.calibration}/100 | Edge: ${d.liveEdge}/100\nProfit: ${d.profitability}/100 | Consist: ${d.consistency}/100\nDisc: ${d.discipline}/100 | Sample: ${d.sampleSize}/100\n\n💰 PnL: <b>${tgPnl(d.raw.totalPnl)}</b>\n📈 ${d.raw.totalTrades} trades, ${d.raw.resolvedBets} resolved${flags ? '\n\n🚩 ' + flags : ''}${greens ? '\n🟢 ' + greens : ''}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/${d.wallet}">Full Scorecard</a>`);
+    } else if (text.startsWith('/compare')) {
+      const parts = text.replace(/^\/compare\s*/, '').split(/\s+/);
+      if (parts.length < 2) { await tgSend(chatId, '⚠️ Usage: <code>/compare &lt;wallet1&gt; &lt;wallet2&gt;</code>'); return; }
+
+      await tgSend(chatId, '⏳ Comparing...');
+      const [d1, d2] = await Promise.all([scorePolymarketTrader(parts[0]), scorePolymarketTrader(parts[1])]);
+      if (!d1 || !d2) { await tgSend(chatId, '❌ One or both wallets not found.'); return; }
+
+      await tgSend(chatId, `⚔️ <b>VIGIL Head-to-Head</b>\n\n${tgGradeEmoji(d1.trustGrade)} <b>${hEsc(d1.displayName?.split('-')[0] || d1.wallet.slice(0,10))}</b>: ${d1.trustGrade}/${d1.trustScore}\n${tgGradeEmoji(d2.trustGrade)} <b>${hEsc(d2.displayName?.split('-')[0] || d2.wallet.slice(0,10))}</b>: ${d2.trustGrade}/${d2.trustScore}\n\n💰 ${tgPnl(d1.raw.totalPnl)} vs ${tgPnl(d2.raw.totalPnl)}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/compare?w1=${d1.wallet}&w2=${d2.wallet}">Full Comparison</a>`);
+    } else if (text.startsWith('/top') || text.startsWith('/leaderboard')) {
+      let lb = '🏆 <b>Polymarket Top 10 — VIGIL Scored</b>\n\n';
+      for (let i = 0; i < TOP_WALLETS.length; i++) {
+        const w = TOP_WALLETS[i];
+        lb += `${i + 1}. ${tgGradeEmoji(w.grade)} <b>${hEsc(w.name)}</b> ${w.grade}/${w.score} — ${tgPnl(w.pnl)}\n`;
+      }
+      lb += `\n🔗 <a href="https://vigil-trust-api.onrender.com">Full Leaderboard</a>`;
+      await tgSend(chatId, lb);
+    }
+  } catch (e: any) {
+    console.error('[TG Bot] Error:', e.message);
+    await tgSend(chatId, '❌ Something went wrong. Try again.').catch(() => {});
+  }
+});
+
+// Setup webhook endpoint (call once to register)
+app.get('/telegram/setup', async (req, res) => {
+  if (!TG_BOT_TOKEN) { res.json({ error: 'TELEGRAM_BOT_TOKEN not set' }); return; }
+  const webhookUrl = `https://vigil-trust-api.onrender.com/telegram/webhook`;
+  const result = await fetch(`${TG_API_BASE}/setWebhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: webhookUrl }),
+  }).then(r => r.json());
+  res.json({ webhookUrl, result });
+});
+
 // --- Start server ---
 async function start() {
   // Initialize database (graceful fallback to memory if unavailable)
@@ -2337,7 +2663,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║         VIGIL Trust Score API v1.7.0             ║
+║       VIGIL Trust Score API v1.13.0              ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
@@ -2644,7 +2970,7 @@ ${recentRows.length > 0 ? `<div class="card">
 
 <div class="foot">
   VIGIL Trust Score is informational only — not investment advice.<br/>
-  Built by Freedom United Works &middot; v1.11.0
+  Built by Freedom United Works &middot; v1.13.0
 </div>
 
 </div>
