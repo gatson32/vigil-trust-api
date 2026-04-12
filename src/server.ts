@@ -400,6 +400,39 @@ function formatAgentResponse(agent: ScoredAgent) {
 //  ROUTES
 // ============================================================
 
+// --- Privacy Policy ---
+app.get('/privacy', (_req, res) => {
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL — Privacy Policy</title></head>
+<body style="background:#0a0e1a;color:#d1d5db;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px;line-height:1.8">
+<div style="max-width:700px;margin:0 auto">
+<h1 style="color:#fff;font-size:28px;margin-bottom:8px">VIGIL Privacy Policy</h1>
+<p style="color:#6b7280;font-size:13px">Last updated: April 12, 2026</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">What We Collect</h2>
+<p>VIGIL does not collect, store, or transmit any personal data. The Chrome extension and web application operate without user accounts, logins, cookies, or tracking.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Chrome Extension</h2>
+<p>The VIGIL Chrome extension reads only the wallet address from Polymarket page URLs to fetch trust score data from the VIGIL API. It does not access browsing history, form data, credentials, or any other personal information. No data is sent to any third party.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">API Usage</h2>
+<p>When you use the VIGIL API or website, we process the wallet address you submit to generate a trust score. Wallet addresses are public blockchain data. We do not link wallet addresses to personal identities. API request logs (IP address, timestamp, endpoint) are retained for up to 30 days for rate limiting and abuse prevention, then deleted.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">API Keys</h2>
+<p>If you create an API key, we store the email address you provide and your usage count. This data is used solely for account management and billing. We do not share it with third parties.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Cookies &amp; Tracking</h2>
+<p>VIGIL does not use cookies, analytics trackers, or any form of browser fingerprinting. No Google Analytics, no Facebook Pixel, no tracking scripts of any kind.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Data Sharing</h2>
+<p>We do not sell, rent, or share any data with third parties. Trust scores are computed on our servers and returned directly to you.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Contact</h2>
+<p>Questions about this policy: <a href="mailto:gatson32@gmail.com" style="color:#a78bfa">gatson32@gmail.com</a></p>
+
+<div style="margin-top:40px;padding-top:20px;border-top:1px solid #1f2937;font-size:12px;color:#4b5563">VIGIL — Built by Freedom United Works</div>
+</div></body></html>`);
+});
+
 // --- Google Site Verification ---
 app.get('/google3752379bc7fac689.html', (_req, res) => {
   res.type('html').send('google-site-verification: google3752379bc7fac689.html');
