@@ -211,6 +211,130 @@ export async function fetchAllPositions(wallet: string): Promise<PolymarketPosit
 }
 
 // ============================================================
+//  TRADE RESOLUTION ENGINE — reconstruct resolved bets from trades
+//  When positions get purged from the API, trades remain. We look up
+//  each market's resolution via the CLOB API to recover calibration data.
+// ============================================================
+
+const CLOB_BASE = 'https://clob.polymarket.com';
+
+interface MarketResolution {
+  conditionId: string;
+  resolved: boolean;
+  winningOutcome: string | null; // 'Yes' or 'No'
+}
+
+// Cache market resolutions — they never change once resolved
+const marketResolutionCache = new Map<string, MarketResolution>();
+
+async function fetchMarketResolution(conditionId: string): Promise<MarketResolution | null> {
+  if (marketResolutionCache.has(conditionId)) return marketResolutionCache.get(conditionId)!;
+
+  try {
+    const data = await fetchJson<any>(`${CLOB_BASE}/markets/${conditionId}`, 5000);
+    if (!data || !data.tokens) return null;
+
+    const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+    const winner = tokens.find((t: any) => t.winner === true);
+    const resolved = data.closed === true && winner != null;
+
+    const result: MarketResolution = {
+      conditionId,
+      resolved,
+      winningOutcome: resolved ? (winner.outcome || null) : null,
+    };
+
+    if (resolved) marketResolutionCache.set(conditionId, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reconstruct resolved bets from trade history by looking up market outcomes.
+ * For each unique conditionId in the trader's trades, check if the market resolved.
+ * If it did, aggregate the trader's position and determine if they were correct.
+ *
+ * Caps at 100 market lookups to stay within rate limits.
+ */
+async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<ResolvedBet[]> {
+  // Group trades by conditionId
+  const tradesByMarket = new Map<string, PolymarketTrade[]>();
+  for (const t of trades) {
+    if (!t.conditionId) continue;
+    const existing = tradesByMarket.get(t.conditionId) || [];
+    existing.push(t);
+    tradesByMarket.set(t.conditionId, existing);
+  }
+
+  // Look up resolution for each market (cap at 100 to avoid rate limits)
+  const conditionIds = [...tradesByMarket.keys()].slice(0, 100);
+  const resolutions = await Promise.allSettled(
+    conditionIds.map(id => fetchMarketResolution(id))
+  );
+
+  const resolvedBets: ResolvedBet[] = [];
+
+  for (let i = 0; i < conditionIds.length; i++) {
+    const res = resolutions[i];
+    if (res.status !== 'fulfilled' || !res.value || !res.value.resolved) continue;
+
+    const market = res.value;
+    const marketTrades = tradesByMarket.get(conditionIds[i])!;
+
+    // Aggregate the trader's net position in this market
+    // BUY YES at price X = betting YES with implied prob X
+    // BUY NO at price X = betting NO with implied prob X
+    // We need the weighted average entry price and which side they're on
+    let yesShares = 0;
+    let noShares = 0;
+    let yesCost = 0;
+    let noCost = 0;
+
+    for (const t of marketTrades) {
+      const shares = t.size || 0;
+      const cost = t.usdcSize || (shares * t.price);
+      if (t.side === 'BUY') {
+        if (t.outcome === 'Yes') { yesShares += shares; yesCost += cost; }
+        else { noShares += shares; noCost += cost; }
+      } else {
+        // SELL reduces position
+        if (t.outcome === 'Yes') { yesShares -= shares; yesCost -= cost; }
+        else { noShares -= shares; noCost -= cost; }
+      }
+    }
+
+    // Determine net position
+    const netYes = yesShares > noShares;
+    const netShares = netYes ? yesShares : noShares;
+    const netCost = netYes ? yesCost : noCost;
+    if (netShares <= 0) continue; // fully exited position
+
+    const avgPrice = netCost > 0 && netShares > 0 ? netCost / netShares : 0.5;
+    const impliedProb = Math.max(0.01, Math.min(0.99, avgPrice));
+
+    // Did they win?
+    const traderSide = netYes ? 'Yes' : 'No';
+    const correct = market.winningOutcome === traderSide;
+
+    // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice per share
+    const pnl = correct
+      ? netShares * (1 - avgPrice)
+      : -netShares * avgPrice;
+
+    resolvedBets.push({
+      impliedProb,
+      correct,
+      pnl,
+      size: netShares,
+    });
+  }
+
+  return resolvedBets;
+}
+
+// ============================================================
 //  CALIBRATION ENGINE — THE PROPRIETARY LAYER
 //
 //  When a trader buys YES at $0.70, they're implying a 70%
@@ -411,10 +535,29 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
 
   if (trades.length === 0 && allPositions.length === 0) return null;
 
-  // --- Extract resolved bets from positions for calibration ---
-  // Positions with curPrice > 0.95 or < 0.05 are effectively resolved.
-  // avgPrice = what the trader paid = their implied probability belief.
-  const resolvedBets = extractResolvedBetsFromPositions(allPositions);
+  // --- Extract resolved bets for calibration ---
+  // Step 1: Try positions (curPrice > 0.95 or < 0.05)
+  let resolvedBets = extractResolvedBetsFromPositions(allPositions);
+
+  // Step 2: If positions gave us thin data but we have lots of trades,
+  // reconstruct resolved bets by looking up market outcomes via CLOB API.
+  // This recovers data from positions that Polymarket's API has purged.
+  const uniqueMarketCount = new Set(trades.map(t => t.conditionId)).size;
+  if (resolvedBets.length < 20 && trades.length >= 50 && uniqueMarketCount >= 10) {
+    try {
+      const clobResolved = await resolveTradesViaClob(trades);
+      if (clobResolved.length > resolvedBets.length) {
+        // CLOB lookup found more resolved bets — use it
+        // Merge: keep position-based bets and add any new ones from CLOB
+        const positionConditionIds = new Set(allPositions.map(p => p.conditionId));
+        const newBets = clobResolved; // CLOB already handles deduplication via conditionId grouping
+        resolvedBets = newBets.length > resolvedBets.length ? newBets : resolvedBets;
+      }
+    } catch {
+      // CLOB lookup failed — continue with position-based data
+    }
+  }
+
   const calibrationReport = computeCalibration(resolvedBets);
 
   // Separate open positions for portfolio analysis
@@ -476,16 +619,27 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   const concentrationScore = Math.max(0, Math.min(100, (1 - concentration) * 100));
   const disciplineDim = (marketDiv * 0.5) + (concentrationScore * 0.5);
 
-  // --- DIMENSION 5: SAMPLE SIZE (15%) ---
+  // --- DIMENSION 5: SAMPLE SIZE (10%) ---
+  // Use the BEST available signal: resolved bets > open positions > trade count
+  // A wallet with 2000 trades and 440 markets has proven activity even if
+  // Polymarket's API purged its old positions.
   let sampleSizeDim: number;
   const n = resolvedBets.length;
-  if (n < 5) sampleSizeDim = 5;
-  else if (n < 10) sampleSizeDim = 20;
-  else if (n < 25) sampleSizeDim = 40;
-  else if (n < 50) sampleSizeDim = 60;
-  else if (n < 100) sampleSizeDim = 75;
-  else if (n < 250) sampleSizeDim = 88;
-  else sampleSizeDim = 100;
+  const tradeSignal = Math.min(100, trades.length / 10); // 1000 trades = 100
+  const marketSignal = Math.min(100, uniqueMarkets * 2);  // 50 markets = 100
+  const activityScore = Math.max(tradeSignal, marketSignal);
+
+  if (n >= 250) sampleSizeDim = 100;
+  else if (n >= 100) sampleSizeDim = 88;
+  else if (n >= 50) sampleSizeDim = 75;
+  else if (n >= 25) sampleSizeDim = 60;
+  else if (n >= 10) sampleSizeDim = 40;
+  else if (n >= 5) sampleSizeDim = 20;
+  else {
+    // Few or zero resolved bets — fall back to activity score but capped
+    // Can't fully trust scoring without resolved bets, but activity proves the wallet is real
+    sampleSizeDim = Math.min(50, Math.max(5, activityScore * 0.5));
+  }
 
   // --- DIMENSION 6: LIVE EDGE (25%) ---
   // How are the trader's OPEN positions performing right now?
@@ -572,16 +726,20 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   const totalPenalty = pennyPenalty + receiveOnlyPenalty + pnlDivPenalty;
   const trustScore = Math.max(0, rawTrustScore - totalPenalty);
 
-  // Sample-size gate — relaxed if trader has significant open positions
+  // Sample-size gate — considers resolved bets, open positions, AND trade activity
   const totalDataPoints = resolvedBets.length + positions.length;
+  const hasProvenActivity = trades.length >= 100 && uniqueMarkets >= 20;
   let gatedScore: number;
   if (resolvedBets.length >= 10) {
     gatedScore = trustScore; // enough resolved data, no gate
   } else if (resolvedBets.length >= 5) {
-    gatedScore = Math.min(trustScore, 50);
-  } else if (totalDataPoints >= 20) {
-    // Few resolved but many open positions — cap at C range, let live edge speak
     gatedScore = Math.min(trustScore, 60);
+  } else if (hasProvenActivity) {
+    // Few resolved bets but massive trade history — the wallet is real,
+    // positions just got purged from the API. Cap at C+ range.
+    gatedScore = Math.min(trustScore, 65);
+  } else if (totalDataPoints >= 20) {
+    gatedScore = Math.min(trustScore, 55);
   } else if (totalDataPoints >= 5) {
     gatedScore = Math.min(trustScore, 40);
   } else {
@@ -594,7 +752,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   }
 
   const trustGrade = gradeFromScore(gatedScore);
-  const trustTier = totalDataPoints < 5 ? 'UNPROVEN' : tierFromGrade(trustGrade);
+  const trustTier = (totalDataPoints < 5 && !hasProvenActivity) ? 'UNPROVEN' : tierFromGrade(trustGrade);
 
   // --- SIGNALS ---
   const reasoning: string[] = [];
@@ -626,7 +784,11 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   if (winRate < 0.4 && resolvedBets.length >= 10) flags.push(`Low win rate: ${(winRate * 100).toFixed(0)}%`);
   if (concentration > 0.5) flags.push(`Concentrated portfolio: ${(concentration * 100).toFixed(0)}% in single market`);
   if (uniqueMarkets >= 20) greenFlags.push(`Well-diversified: ${uniqueMarkets} unique markets`);
-  if (resolvedBets.length < 10) flags.push(`Thin resolved data: only ${resolvedBets.length} resolved bets`);
+  if (resolvedBets.length < 10 && hasProvenActivity) {
+    flags.push(`Limited resolved data (${resolvedBets.length} resolved) despite ${trades.length} trades across ${uniqueMarkets} markets — older positions may have been purged from API`);
+  } else if (resolvedBets.length < 10) {
+    flags.push(`Thin resolved data: only ${resolvedBets.length} resolved bets`);
+  }
 
   // --- ON-CHAIN VERIFICATION SIGNALS ---
   let onChainBlock: PolymarketRiskReport['onChain'] = null;
