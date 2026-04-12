@@ -335,9 +335,10 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
     }
 
     // --- Wallet Age ---
-    const firstTs = successTxs.length > 0
-      ? Number(successTxs[0].timeStamp)
-      : 0;
+    // Check both regular txs AND token transfers for earliest activity
+    const firstTxTs = successTxs.length > 0 ? Number(successTxs[0].timeStamp) : Infinity;
+    const firstTokenTs = tokenTxs.length > 0 ? Number(tokenTxs[0].timeStamp) : Infinity;
+    const firstTs = Math.min(firstTxTs, firstTokenTs) === Infinity ? 0 : Math.min(firstTxTs, firstTokenTs);
     const nowSec = Math.floor(Date.now() / 1000);
     const ageDays = firstTs > 0 ? Math.floor((nowSec - firstTs) / 86400) : 0;
 
@@ -366,7 +367,7 @@ export async function getWalletProvenance(wallet: string, chainId: number = CHAI
 
     // 2. Transaction Volume (0-25 points)
     //    <5 = 0, 5-20 = 5, 20-50 = 10, 50-200 = 15, 200-500 = 20, 500+ = 25
-    const txCount = successTxs.length;
+    const txCount = successTxs.length + tokenTxs.length; // count both ETH txs and token transfers
     if (txCount >= 500) { score += 25; greenFlags.push(`Heavy on-chain activity: ${txCount} txs`); }
     else if (txCount >= 200) { score += 20; greenFlags.push(`Active on-chain: ${txCount} txs`); }
     else if (txCount >= 50) score += 15;
