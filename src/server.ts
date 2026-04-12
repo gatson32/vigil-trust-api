@@ -78,6 +78,9 @@ const MAX_RECENT = 50;
 
 // Username → wallet lookup cache. Grows as wallets get scored.
 const usernameToWallet = new Map<string, string>();
+// Persisted discovery alerts (loaded from DB on boot, so homepage links work before crawler runs)
+let knownBGradeWallets: Array<{ wallet: string; displayName: string }> = [];
+let knownAGradeWallets: Array<{ wallet: string; displayName: string }> = [];
 
 function addRecentScore(r: PolymarketRiskReport): void {
   // Avoid duplicates — remove existing entry for same wallet
@@ -2214,9 +2217,8 @@ app.get('/polymarket/leaderboard', (_req, res) => {
   let rows = '';
   if (leaderboard.length === 0) {
     rows = `<tr><td colspan="7" style="text-align:center;padding:48px;color:#707070">
-      <div style="font-size:36px;margin-bottom:12px">🔍</div>
-      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px">Crawler is scanning...</div>
-      <div style="font-size:14px;color:#555;max-width:400px;margin:0 auto">The discovery crawler is scanning resolved Polymarket markets to find skilled forecasters. It runs every 6 hours. Check back soon — or score any wallet now using the search above.</div>
+      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:8px">Leaderboard is loading</div>
+      <div style="font-size:13px;color:#555;max-width:400px;margin:0 auto">The discovery crawler builds this leaderboard from resolved Polymarket markets. It takes about 2 minutes after a deploy. Score any wallet now using the search above.</div>
     </td></tr>`;
   } else {
     rows = leaderboard.slice(0, 100).map((e, i) => {
@@ -3046,6 +3048,24 @@ async function start() {
     } catch (err) {
       console.error('[BOOT] Failed to load subscribers:', err);
     }
+
+    // Load discovery alerts so homepage grade links work immediately (before crawler runs)
+    try {
+      const alerts = await query("SELECT wallet, display_name, trust_grade FROM discovery_alerts ORDER BY trust_score DESC");
+      if (alerts?.rows) {
+        for (const row of alerts.rows) {
+          if (row.trust_grade === 'B') knownBGradeWallets.push({ wallet: row.wallet, displayName: row.display_name });
+          if (row.trust_grade === 'A') knownAGradeWallets.push({ wallet: row.wallet, displayName: row.display_name });
+          // Seed username cache from alerts too
+          if (row.display_name && !row.display_name.startsWith('0x')) {
+            usernameToWallet.set(row.display_name.toLowerCase(), row.wallet);
+          }
+        }
+        console.log(`[BOOT] Loaded ${knownAGradeWallets.length} A-grade + ${knownBGradeWallets.length} B-grade wallets from discovery_alerts`);
+      }
+    } catch (err) {
+      console.error('[BOOT] Failed to load discovery alerts:', err);
+    }
   }
 
   app.listen(PORT, () => {
@@ -3211,9 +3231,13 @@ function renderHomepage(): string {
 </tr>`;
   }).join('');
 
-  // Build VIGIL Top 10 by Skill (from discovery crawler)
-  const skillTop10 = getSkillLeaderboard().slice(0, 10);
-  const skillTop10Rows = skillTop10.length > 0 ? skillTop10.map((e, i) => {
+  // Build VIGIL Elite list — only A and B grade wallets
+  const fullLeaderboard = getSkillLeaderboard();
+  const eliteWallets = fullLeaderboard.filter(e => e.trustGrade === 'A' || e.trustGrade === 'B').slice(0, 10);
+  // Grade counts: prefer live crawler data, fall back to DB-persisted discovery alerts
+  const aGradeCount = fullLeaderboard.filter(e => e.trustGrade === 'A').length || knownAGradeWallets.length;
+  const bGradeCount = fullLeaderboard.filter(e => e.trustGrade === 'B').length || knownBGradeWallets.length;
+  const skillTop10Rows = eliteWallets.length > 0 ? eliteWallets.map((e, i) => {
     const gc = gradeColor(e.trustGrade);
     const pnl = e.realizedPnl >= 0
       ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
@@ -3387,8 +3411,8 @@ function doSubscribe(e) {
 
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:48px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;background:#0a0a0a">
   <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">600+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Wallets Scanned</div></div>
-  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">0</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">A-Grade Found</div></a>
-  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">${skillTop10.filter(e => e.trustGrade === 'B').length || 1}</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">B-Grade Found</div></a>
+  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">${aGradeCount}</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">A-Grade Found</div></a>
+  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">${bGradeCount}</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">B-Grade Found</div></a>
   <div style="text-align:center;padding:28px 16px"><div style="font-size:28px;font-weight:800;color:#555;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">500+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Markets Crawled</div></div>
 </div>
 
@@ -3437,8 +3461,8 @@ function doSubscribe(e) {
 </div>
 
 ${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-bottom:48px;background:#0a0a0a;border-color:#1e1e1e">
-  <div class="sec-hdr">VIGIL Top 10 — Ranked by Skill</div>
-  <p style="font-size:14px;color:#707070;margin-bottom:16px">The highest-scoring wallets discovered by VIGIL's crawler — ranked by actual forecasting skill, not profit. <a href="/polymarket/leaderboard" style="color:#00d4aa">View full leaderboard →</a></p>
+  <div class="sec-hdr">VIGIL Elite — A & B Grade Wallets</div>
+  <p style="font-size:14px;color:#707070;margin-bottom:16px">The only wallets that scored A or B out of 600+ scanned. These traders show real forecasting skill — not luck, not speed, not size. <a href="/polymarket/leaderboard" style="color:#00d4aa">Full leaderboard →</a></p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
   <tr style="border-bottom:2px solid #1e1e1e">
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">#</th>
