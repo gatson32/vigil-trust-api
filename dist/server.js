@@ -1,0 +1,3152 @@
+// VIGIL Trust Score API Server
+// On-chain credit bureau for AI agents on Virtuals Protocol
+import express from 'express';
+import cors from 'cors';
+import { randomBytes, timingSafeEqual } from 'crypto';
+import { scoreAgent, TIER_CONFIG } from './lib/scoring.js';
+import { fetchAgentsPage, fetchAgentByWallet, fetchAgentById, searchAgents, } from './lib/virtuals-client.js';
+import { TTLCache } from './lib/cache.js';
+import { recordSnapshot, getHistory, getScoreDeltas, getHistoryStats, getRecentMovers, } from './lib/history.js';
+import { initDb, closeDb, isDbConnected } from './lib/db.js';
+import { assessAgent } from './lib/sentinel.js';
+import { startEvaluatorListener } from './lib/evaluator.js';
+import { scoreByQuery as scoreDegenClawByQuery, scoreAllAgents as scoreAllDegenClawAgents, } from './lib/degenclaw.js';
+import { writeDegenClawSnapshot, getAgentHistory as getDegenClawAgentHistory, getSnapshotStats, } from './lib/snapshots.js';
+import { scorePolymarketTrader, runDiscoveryCrawl, getSkillLeaderboard, getCrawlerStatus, } from './lib/polymarket.js';
+import { getWalletProvenance, isBasescanConfigured, quickSybilCheck, } from './lib/basescan.js';
+const app = express();
+const PORT = parseInt(process.env.PORT || '3100', 10);
+// Enable trust-proxy for proper IP detection behind reverse proxies (Render, etc.)
+app.set('trust proxy', 1);
+// ============================================================
+//  CONFIGURATION
+// ============================================================
+const ALLOWED_ORIGINS = [
+    'https://vigiltrust.io',
+    'https://www.vigiltrust.io',
+    'http://localhost:5173', // Vite dev
+    'http://localhost:3000', // local dev
+];
+const recentScores = [];
+const MAX_RECENT = 50;
+// Username → wallet lookup cache. Grows as wallets get scored.
+const usernameToWallet = new Map();
+function addRecentScore(r) {
+    // Avoid duplicates — remove existing entry for same wallet
+    const idx = recentScores.findIndex(s => s.wallet === r.wallet);
+    if (idx >= 0)
+        recentScores.splice(idx, 1);
+    recentScores.unshift({
+        wallet: r.wallet,
+        displayName: r.displayName,
+        trustGrade: r.trustGrade,
+        trustScore: r.trustScore,
+        totalPnl: r.raw.totalPnl,
+        resolvedBets: r.raw.resolvedBets,
+        scoredAt: r.scoredAt,
+    });
+    if (recentScores.length > MAX_RECENT)
+        recentScores.pop();
+    // Index username → wallet for search
+    if (r.displayName && r.displayName !== r.wallet) {
+        usernameToWallet.set(r.displayName.toLowerCase(), r.wallet);
+    }
+    if (r.pseudonym) {
+        usernameToWallet.set(r.pseudonym.toLowerCase(), r.wallet);
+    }
+}
+// Resolve an identifier to a wallet address
+// Accepts: 0x address, Polymarket username, or partial match
+function resolveWalletIdentifier(input) {
+    const trimmed = input.trim();
+    if (trimmed.startsWith('0x') && trimmed.length >= 40)
+        return trimmed.toLowerCase();
+    // Exact username match
+    const exact = usernameToWallet.get(trimmed.toLowerCase());
+    if (exact)
+        return exact;
+    // Partial match — find first username containing the search term
+    const lower = trimmed.toLowerCase();
+    for (const [name, wallet] of usernameToWallet) {
+        if (name.includes(lower))
+            return wallet;
+    }
+    return null;
+}
+// Rate limiting — simple in-memory sliding window
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 60; // 60 requests per minute per IP
+const rateLimitStore = new Map();
+function getRateLimitInfo(ip) {
+    const now = Date.now();
+    let entry = rateLimitStore.get(ip);
+    if (!entry || now > entry.resetAt) {
+        entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+        rateLimitStore.set(ip, entry);
+    }
+    entry.count++;
+    const allowed = entry.count <= RATE_LIMIT_MAX;
+    const remaining = Math.max(0, RATE_LIMIT_MAX - entry.count);
+    return { allowed, remaining, resetAt: entry.resetAt };
+}
+// Clean up rate limit store periodically (every 5 min)
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitStore) {
+        if (now > entry.resetAt)
+            rateLimitStore.delete(ip);
+    }
+}, 300_000);
+// ============================================================
+//  EMAIL CAPTURE — Newsletter / launch updates
+// ============================================================
+const emailSubscribers = new Set();
+const API_TIERS = {
+    free: { monthlyLimit: 100, ratePerMin: 10, price: 0, label: 'Free' },
+    starter: { monthlyLimit: 1000, ratePerMin: 30, price: 29, label: 'Starter — $29/mo' },
+    pro: { monthlyLimit: 10000, ratePerMin: 120, price: 99, label: 'Pro — $99/mo' },
+    enterprise: { monthlyLimit: 100000, ratePerMin: 600, price: 499, label: 'Enterprise — $499/mo' },
+};
+// In-memory API key store (will move to DB later)
+const apiKeyStore = new Map();
+function generateApiKey() {
+    return 'vgl_' + randomBytes(24).toString('base64url').slice(0, 32);
+}
+function validateApiKey(key) {
+    const record = apiKeyStore.get(key);
+    if (!record)
+        return null;
+    if (record.expiresAt && new Date(record.expiresAt) < new Date())
+        return null;
+    return record;
+}
+function getApiKeyRateLimit(key) {
+    const record = apiKeyStore.get(key);
+    if (!record)
+        return { allowed: false, remaining: 0 };
+    if (record.monthlyUsage >= record.monthlyLimit) {
+        return { allowed: false, remaining: 0 };
+    }
+    record.monthlyUsage++;
+    return { allowed: true, remaining: record.monthlyLimit - record.monthlyUsage };
+}
+// Reset monthly usage on the 1st of each month
+setInterval(() => {
+    const now = new Date();
+    if (now.getDate() === 1 && now.getHours() === 0 && now.getMinutes() < 6) {
+        for (const record of apiKeyStore.values()) {
+            record.monthlyUsage = 0;
+        }
+        console.log('[API Keys] Monthly usage reset');
+    }
+}, 300_000); // check every 5 min
+// ============================================================
+//  CACHES
+// ============================================================
+const leaderboardCache = new TTLCache(300); // 5 min
+const scoreCache = new TTLCache(120); // 2 min
+const ecosystemCache = new TTLCache(300); // 5 min
+// Prescore cache: stores full PolymarketRiskReport keyed by wallet address
+// Structure: { wallet: PolymarketRiskReport & { cachedAt: number } }
+const prescoredCache = new Map();
+// Circuit breaker state for upstream Virtuals API
+let upstreamHealthy = true;
+let upstreamFailCount = 0;
+let upstreamLastFailure = 0;
+const UPSTREAM_FAIL_THRESHOLD = 3;
+const UPSTREAM_RECOVERY_MS = 30_000; // 30s cooldown before retrying
+function recordUpstreamSuccess() {
+    upstreamHealthy = true;
+    upstreamFailCount = 0;
+}
+function recordUpstreamFailure() {
+    upstreamFailCount++;
+    upstreamLastFailure = Date.now();
+    if (upstreamFailCount >= UPSTREAM_FAIL_THRESHOLD) {
+        upstreamHealthy = false;
+        console.warn(`[CIRCUIT BREAKER] Upstream marked unhealthy after ${upstreamFailCount} failures`);
+    }
+}
+function isUpstreamAvailable() {
+    if (upstreamHealthy)
+        return true;
+    // Allow retry after cooldown
+    if (Date.now() - upstreamLastFailure > UPSTREAM_RECOVERY_MS) {
+        console.log('[CIRCUIT BREAKER] Cooldown elapsed, allowing retry');
+        return true;
+    }
+    return false;
+}
+// ============================================================
+//  MIDDLEWARE
+// ============================================================
+// CORS — restricted to known origins
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (curl, server-to-server, mobile apps)
+        if (!origin)
+            return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin))
+            return callback(null, true);
+        // Reject unknown origins
+        console.log(`[CORS] Request from unlisted origin rejected: ${origin}`);
+        return callback(new Error('CORS not allowed'), false);
+    },
+    methods: ['GET', 'POST'],
+    maxAge: 86400,
+}));
+app.use(express.json());
+// Request logging
+app.use((req, _res, next) => {
+    console.log(`${new Date().toISOString()} ${req.method} ${req.path} [${req.ip}]`);
+    next();
+});
+// Rate limiting middleware — API key holders get elevated limits
+app.use((req, res, next) => {
+    const apiKey = req.headers['x-api-key'] || req.query.api_key;
+    // If valid API key, use its own rate limit
+    if (apiKey) {
+        const record = validateApiKey(apiKey);
+        if (record) {
+            const { allowed, remaining } = getApiKeyRateLimit(apiKey);
+            res.setHeader('X-RateLimit-Limit', record.monthlyLimit.toString());
+            res.setHeader('X-RateLimit-Remaining', remaining.toString());
+            res.setHeader('X-Api-Tier', record.tier);
+            if (!allowed) {
+                return res.status(429).json({
+                    error: 'Monthly API limit exceeded',
+                    message: `Your ${record.tier} plan allows ${record.monthlyLimit} requests/month. Upgrade at /v1/api/pricing`,
+                    tier: record.tier,
+                });
+            }
+            return next();
+        }
+        // Invalid key — fall through to IP-based limiting
+    }
+    // Default IP-based rate limiting for unauthenticated requests
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const { allowed, remaining, resetAt } = getRateLimitInfo(ip);
+    res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX.toString());
+    res.setHeader('X-RateLimit-Remaining', remaining.toString());
+    res.setHeader('X-RateLimit-Reset', Math.ceil(resetAt / 1000).toString());
+    if (!allowed) {
+        return res.status(429).json({
+            error: 'Rate limit exceeded',
+            message: `Maximum ${RATE_LIMIT_MAX} requests per minute. Add an API key for higher limits. See /v1/api/pricing`,
+            retryAfter: Math.ceil((resetAt - Date.now()) / 1000),
+        });
+    }
+    next();
+});
+// ============================================================
+//  INPUT VALIDATION HELPERS
+// ============================================================
+function isValidIdentifier(id) {
+    // Wallet address: 0x followed by 40 hex chars
+    if (/^0x[a-fA-F0-9]{40}$/.test(id))
+        return true;
+    // Document ID: alphanumeric, reasonable length
+    if (/^[a-zA-Z0-9_-]{1,100}$/.test(id))
+        return true;
+    return false;
+}
+function sanitizeSearchQuery(q) {
+    // Remove any characters that could be used for injection
+    return q.replace(/[^\w\s\-_.]/g, '').trim().slice(0, 100);
+}
+function clampInt(value, min, max, defaultVal) {
+    const parsed = parseInt(value);
+    if (isNaN(parsed))
+        return defaultVal;
+    return Math.min(max, Math.max(min, parsed));
+}
+// ============================================================
+//  HELPER: format scored agent for API response
+// ============================================================
+function formatAgentResponse(agent) {
+    return {
+        name: agent.name,
+        documentId: agent.documentId,
+        walletAddress: agent.walletAddress,
+        profilePic: agent.profilePic,
+        category: agent.category,
+        symbol: agent.symbol,
+        twitterHandle: agent.twitterHandle,
+        cluster: agent.cluster,
+        role: agent.role,
+        isOnline: agent.isOnline,
+        hasGraduated: agent.hasGraduated,
+        trustScore: agent.trustScore,
+        trustTier: agent.trustTier,
+        trustGrade: agent.trustGrade,
+        tierLabel: TIER_CONFIG[agent.trustTier].label,
+        riskFlags: agent.riskFlags,
+        scoreBreakdown: {
+            // Core dimensions (55%)
+            reliability: { score: agent.reliabilityScore, weight: 0.15 },
+            activity: { score: agent.activityScore, weight: 0.10 },
+            economic: { score: agent.economicScore, weight: 0.10 },
+            reputation: { score: agent.reputationScore, weight: 0.10 },
+            longevity: { score: agent.longevityScore, weight: 0.10 },
+            // Proprietary dimensions (45%)
+            behavioral: { score: agent.behavioralScore, weight: 0.10, label: 'Behavioral Anomaly' },
+            complexity: { score: agent.complexityScore, weight: 0.10, label: 'Task Complexity' },
+            sustainability: { score: agent.sustainabilityScore, weight: 0.10, label: 'Economic Sustainability' },
+            // Penalty systems (not weighted — applied as modifiers)
+            sybilRisk: { score: agent.sybilRiskScore, weight: 0, label: 'Sybil Risk (penalty)' },
+            regression: { score: agent.regressionScore, weight: 0, label: 'Performance Stability' },
+        },
+        metrics: {
+            successRate: agent.successRate,
+            successfulJobCount: agent.successfulJobCount,
+            uniqueBuyerCount: agent.uniqueBuyerCount,
+            transactionCount: agent.transactionCount,
+            grossAgenticAmount: agent.grossAgenticAmount,
+            walletBalance: agent.walletBalance,
+            revenue: agent.revenue,
+            jobCount: agent.jobCount,
+            offeringCount: agent.offeringCount,
+            chainCount: agent.chainCount,
+            accountAgeDays: agent.accountAgeDays,
+            daysSinceActive: agent.daysSinceActive,
+        },
+    };
+}
+// ============================================================
+//  ROUTES
+// ============================================================
+// --- Privacy Policy ---
+app.get('/privacy', (_req, res) => {
+    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL — Privacy Policy</title></head>
+<body style="background:#0a0e1a;color:#d1d5db;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px;line-height:1.8">
+<div style="max-width:700px;margin:0 auto">
+<h1 style="color:#fff;font-size:28px;margin-bottom:8px">VIGIL Privacy Policy</h1>
+<p style="color:#6b7280;font-size:13px">Last updated: April 12, 2026</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">What We Collect</h2>
+<p>VIGIL collects minimal data necessary to operate the service. We do not require user accounts or logins for basic scoring. Specifically:</p>
+<ul style="margin:8px 0;padding-left:20px">
+<li><strong>Email addresses</strong> — only if you voluntarily subscribe to our newsletter or create an API key.</li>
+<li><strong>API request logs</strong> — IP address, timestamp, and endpoint, retained for up to 30 days for rate limiting and abuse prevention.</li>
+<li><strong>Telegram chat IDs</strong> — only if you interact with our Telegram bot, used solely to deliver responses.</li>
+</ul>
+<p>We do not use cookies, analytics trackers, or browser fingerprinting. We do not link wallet addresses to personal identities.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Chrome Extension</h2>
+<p>The VIGIL Chrome extension reads only the wallet address from Polymarket page URLs to fetch trust score data from the VIGIL API. It does not access browsing history, form data, credentials, or any other personal information. No data is sent to any third party.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">API Usage</h2>
+<p>When you use the VIGIL API or website, we process the wallet address you submit to generate a trust score. Wallet addresses are public blockchain data. We do not link wallet addresses to personal identities. API request logs (IP address, timestamp, endpoint) are retained for up to 30 days for rate limiting and abuse prevention, then deleted.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">API Keys</h2>
+<p>If you create an API key, we store the email address you provide and your usage count. This data is used solely for account management and billing. We do not share it with third parties.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Cookies &amp; Tracking</h2>
+<p>VIGIL does not use cookies, analytics trackers, or any form of browser fingerprinting. No Google Analytics, no Facebook Pixel, no tracking scripts of any kind.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Data Sharing</h2>
+<p>We do not sell, rent, or share any data with third parties. Trust scores are computed on our servers and returned directly to you.</p>
+
+<h2 style="color:#fff;font-size:18px;margin-top:32px">Contact</h2>
+<p>Questions about this policy: <a href="mailto:gatson32@gmail.com" style="color:#a78bfa">gatson32@gmail.com</a></p>
+
+<div style="margin-top:40px;padding-top:20px;border-top:1px solid #1f2937;font-size:12px;color:#4b5563">VIGIL — Built by Freedom United Works</div>
+</div></body></html>`);
+});
+// --- Google Site Verification ---
+app.get('/google3752379bc7fac689.html', (_req, res) => {
+    res.type('html').send('google-site-verification: google3752379bc7fac689.html');
+});
+// --- Homepage ---
+app.get('/', (_req, res) => {
+    res.type('html').send(renderHomepage());
+});
+// --- Health check ---
+app.get('/v1/health', async (_req, res) => {
+    const historyStats = await getHistoryStats();
+    res.json({
+        status: 'ok',
+        version: '1.17.0',
+        service: 'VIGIL Trust Score API',
+        timestamp: new Date().toISOString(),
+        upstream: {
+            healthy: upstreamHealthy,
+            failCount: upstreamFailCount,
+        },
+        database: {
+            connected: isDbConnected(),
+        },
+        cache: {
+            leaderboard: leaderboardCache.size,
+            scores: scoreCache.size,
+            ecosystem: ecosystemCache.size,
+            prescore: prescoredCache.size,
+        },
+        rateLimit: {
+            windowMs: RATE_LIMIT_WINDOW_MS,
+            maxRequests: RATE_LIMIT_MAX,
+            activeClients: rateLimitStore.size,
+        },
+        history: historyStats,
+        basescan: {
+            configured: isBasescanConfigured(),
+            chain: 'Base (8453)',
+        },
+    });
+});
+// --- GET /v1/score/:identifier ---
+app.get('/v1/score/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        // Validate identifier
+        if (!isValidIdentifier(identifier)) {
+            return res.status(400).json({
+                error: 'Invalid identifier',
+                message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+            });
+        }
+        const cacheKey = `score:${identifier.toLowerCase()}`;
+        // Check cache
+        const cached = scoreCache.get(cacheKey);
+        if (cached) {
+            return res.json({ data: cached, cached: true });
+        }
+        // Circuit breaker check
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable. Try again in 30 seconds.',
+            });
+        }
+        // Determine if wallet address or documentId
+        let raw;
+        try {
+            if (identifier.startsWith('0x') && identifier.length === 42) {
+                raw = await fetchAgentByWallet(identifier);
+            }
+            else {
+                raw = await fetchAgentById(identifier);
+            }
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        if (!raw) {
+            return res.status(404).json({
+                error: 'Agent not found',
+                message: `No agent found for identifier: ${identifier}`,
+            });
+        }
+        const scored = await scoreAgent(raw);
+        const response = formatAgentResponse(scored);
+        scoreCache.set(cacheKey, response);
+        // Record history snapshot
+        await recordSnapshot(scored.walletAddress, scored.name, {
+            trustScore: scored.trustScore,
+            trustTier: scored.trustTier,
+            reliabilityScore: scored.reliabilityScore,
+            activityScore: scored.activityScore,
+            economicScore: scored.economicScore,
+            reputationScore: scored.reputationScore,
+            longevityScore: scored.longevityScore,
+            behavioralScore: scored.behavioralScore,
+            complexityScore: scored.complexityScore,
+            sustainabilityScore: scored.sustainabilityScore,
+            sybilRiskScore: scored.sybilRiskScore,
+            regressionScore: scored.regressionScore,
+            riskFlags: scored.riskFlags,
+        });
+        return res.json({ data: response, cached: false });
+    }
+    catch (err) {
+        console.error('Score lookup error:', err);
+        return res.status(502).json({
+            error: 'Upstream error',
+            message: 'Failed to fetch agent data from Virtuals Protocol',
+        });
+    }
+});
+// --- GET /v1/leaderboard ---
+app.get('/v1/leaderboard', async (req, res) => {
+    try {
+        const page = clampInt(req.query.page, 1, 100, 1);
+        const pageSize = clampInt(req.query.pageSize, 1, 100, 25);
+        const tier = req.query.tier?.toUpperCase();
+        const category = req.query.category;
+        const sortBy = req.query.sort || 'trustScore';
+        const order = req.query.order?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+        // Validate tier if provided
+        if (tier && !(tier in TIER_CONFIG)) {
+            return res.status(400).json({
+                error: 'Invalid tier',
+                message: `Valid tiers: ${Object.keys(TIER_CONFIG).join(', ')}`,
+            });
+        }
+        const cacheKey = `lb:${page}:${pageSize}:${tier || ''}:${category || ''}:${sortBy}:${order}`;
+        const cached = leaderboardCache.get(cacheKey);
+        if (cached) {
+            return res.json({ ...cached, cached: true });
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        const fetchSize = Math.min(100, pageSize * 2);
+        let result;
+        try {
+            result = await fetchAgentsPage(page, fetchSize, 'grossAgenticAmount:desc');
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        const scoredAgents = await Promise.all(result.data.map(scoreAgent));
+        // Record history for all scored agents
+        await Promise.all(scoredAgents.map(s => recordSnapshot(s.walletAddress, s.name, {
+            trustScore: s.trustScore, trustTier: s.trustTier,
+            reliabilityScore: s.reliabilityScore, activityScore: s.activityScore,
+            economicScore: s.economicScore, reputationScore: s.reputationScore,
+            longevityScore: s.longevityScore,
+            behavioralScore: s.behavioralScore, complexityScore: s.complexityScore,
+            sustainabilityScore: s.sustainabilityScore, sybilRiskScore: s.sybilRiskScore,
+            regressionScore: s.regressionScore, riskFlags: s.riskFlags,
+        })));
+        let agents = scoredAgents.map(formatAgentResponse);
+        if (tier && tier in TIER_CONFIG) {
+            agents = agents.filter(a => a.trustTier === tier);
+        }
+        if (category) {
+            agents = agents.filter(a => a.category.toLowerCase() === category.toLowerCase());
+        }
+        const validSorts = ['trustScore', 'grossAgenticAmount', 'successRate', 'successfulJobCount', 'uniqueBuyerCount'];
+        const sortField = validSorts.includes(sortBy) ? sortBy : 'trustScore';
+        agents.sort((a, b) => {
+            const aVal = sortField === 'trustScore' ? a.trustScore :
+                a.metrics[sortField] || 0;
+            const bVal = sortField === 'trustScore' ? b.trustScore :
+                b.metrics[sortField] || 0;
+            return order === 'asc' ? aVal - bVal : bVal - aVal;
+        });
+        const sliced = agents.slice(0, pageSize);
+        const response = {
+            data: sliced,
+            meta: {
+                page,
+                pageSize,
+                total: result.meta.pagination.total,
+                pageCount: result.meta.pagination.pageCount,
+                filters: { tier: tier || null, category: category || null },
+                sort: { field: sortField, order },
+            },
+            cached: false,
+        };
+        leaderboardCache.set(cacheKey, response);
+        return res.json(response);
+    }
+    catch (err) {
+        console.error('Leaderboard error:', err);
+        return res.status(502).json({
+            error: 'Upstream error',
+            message: 'Failed to fetch leaderboard data',
+        });
+    }
+});
+// --- GET /v1/search ---
+app.get('/v1/search', async (req, res) => {
+    try {
+        const rawQ = req.query.q;
+        if (!rawQ || rawQ.length < 2) {
+            return res.status(400).json({
+                error: 'Invalid query',
+                message: 'Search query must be at least 2 characters',
+            });
+        }
+        const q = sanitizeSearchQuery(rawQ);
+        if (q.length < 2) {
+            return res.status(400).json({
+                error: 'Invalid query',
+                message: 'Search query contains only invalid characters',
+            });
+        }
+        const page = clampInt(req.query.page, 1, 100, 1);
+        const pageSize = clampInt(req.query.pageSize, 1, 50, 10);
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        let result;
+        try {
+            result = await searchAgents(q, page, pageSize);
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        const agents = (await Promise.all(result.data.map(scoreAgent))).map(formatAgentResponse);
+        return res.json({
+            data: agents,
+            meta: {
+                query: q,
+                page,
+                pageSize,
+                total: result.meta.pagination.total,
+                pageCount: result.meta.pagination.pageCount,
+            },
+        });
+    }
+    catch (err) {
+        console.error('Search error:', err);
+        return res.status(502).json({
+            error: 'Upstream error',
+            message: 'Failed to search agents',
+        });
+    }
+});
+// --- GET /v1/ecosystem/health ---
+app.get('/v1/ecosystem/health', async (req, res) => {
+    try {
+        const cacheKey = 'ecosystem:health';
+        const cached = ecosystemCache.get(cacheKey);
+        if (cached) {
+            return res.json({ ...cached, cached: true });
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        let result;
+        try {
+            result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        const agents = await Promise.all(result.data.map(scoreAgent));
+        const tierDistribution = {};
+        for (const tier of Object.keys(TIER_CONFIG)) {
+            tierDistribution[tier] = agents.filter(a => a.trustTier === tier).length;
+        }
+        const avgTrustScore = agents.length > 0
+            ? Math.round(agents.reduce((sum, a) => sum + a.trustScore, 0) / agents.length)
+            : 0;
+        const onlineCount = agents.filter(a => a.isOnline).length;
+        const graduatedCount = agents.filter(a => a.hasGraduated).length;
+        const totalJobs = agents.reduce((sum, a) => sum + a.successfulJobCount, 0);
+        const totalAgdp = agents.reduce((sum, a) => sum + a.grossAgenticAmount, 0);
+        const totalRevenue = agents.reduce((sum, a) => sum + a.revenue, 0);
+        const avgSuccessRate = agents.length > 0
+            ? Math.round(agents.reduce((sum, a) => sum + a.successRate, 0) / agents.length * 10) / 10
+            : 0;
+        const riskyAgents = agents.filter(a => a.riskFlags.length > 0);
+        const response = {
+            data: {
+                totalAgents: result.meta.pagination.total,
+                sampleSize: agents.length,
+                avgTrustScore,
+                avgSuccessRate,
+                tierDistribution,
+                onlineCount,
+                graduatedCount,
+                totalJobs,
+                totalAgdp: Math.round(totalAgdp * 100) / 100,
+                totalRevenue: Math.round(totalRevenue * 100) / 100,
+                riskSummary: {
+                    flaggedCount: riskyAgents.length,
+                    commonFlags: Object.entries(riskyAgents.flatMap(a => a.riskFlags).reduce((acc, flag) => {
+                        acc[flag] = (acc[flag] || 0) + 1;
+                        return acc;
+                    }, {})).sort((a, b) => b[1] - a[1]),
+                },
+                timestamp: new Date().toISOString(),
+            },
+            cached: false,
+        };
+        ecosystemCache.set(cacheKey, response);
+        return res.json(response);
+    }
+    catch (err) {
+        console.error('Ecosystem health error:', err);
+        return res.status(502).json({
+            error: 'Upstream error',
+            message: 'Failed to compute ecosystem health',
+        });
+    }
+});
+// --- GET /v1/compare ---
+app.get('/v1/compare', async (req, res) => {
+    try {
+        const ids = req.query.ids?.split(',').map(s => s.trim()).filter(Boolean);
+        if (!ids || ids.length < 2 || ids.length > 5) {
+            return res.status(400).json({
+                error: 'Invalid request',
+                message: 'Provide 2-5 agent identifiers separated by commas',
+            });
+        }
+        // Validate each identifier
+        for (const id of ids) {
+            if (!isValidIdentifier(id)) {
+                return res.status(400).json({
+                    error: 'Invalid identifier',
+                    message: `Invalid identifier: "${id}". Must be a wallet address (0x...) or alphanumeric document ID`,
+                });
+            }
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        const results = await Promise.allSettled(ids.map(async (id) => {
+            const raw = id.startsWith('0x') && id.length === 42
+                ? await fetchAgentByWallet(id)
+                : await fetchAgentById(id);
+            if (!raw)
+                throw new Error(`Not found: ${id}`);
+            return formatAgentResponse(await scoreAgent(raw));
+        }));
+        // Track upstream health
+        const anyFailed = results.some(r => r.status === 'rejected');
+        const anySucceeded = results.some(r => r.status === 'fulfilled');
+        if (anySucceeded)
+            recordUpstreamSuccess();
+        if (anyFailed && !anySucceeded)
+            recordUpstreamFailure();
+        const agents = results.map((r, i) => ({
+            identifier: ids[i],
+            status: r.status,
+            data: r.status === 'fulfilled' ? r.value : null,
+            error: r.status === 'rejected' ? r.reason.message : null,
+        }));
+        return res.json({ data: agents });
+    }
+    catch (err) {
+        console.error('Compare error:', err);
+        return res.status(502).json({ error: 'Upstream error', message: 'Failed to compare agents' });
+    }
+});
+// --- GET /v1/sentinel/:identifier ---
+app.get('/v1/sentinel/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        // Validate identifier
+        if (!isValidIdentifier(identifier)) {
+            return res.status(400).json({
+                error: 'Invalid identifier',
+                message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+            });
+        }
+        const cacheKey = `sentinel:${identifier.toLowerCase()}`;
+        // Check cache
+        const cached = scoreCache.get(cacheKey);
+        if (cached) {
+            return res.json({ data: cached, cached: true });
+        }
+        // Circuit breaker check
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable. Try again in 30 seconds.',
+            });
+        }
+        // Fetch agent
+        let raw;
+        try {
+            if (identifier.startsWith('0x') && identifier.length === 42) {
+                raw = await fetchAgentByWallet(identifier);
+            }
+            else {
+                raw = await fetchAgentById(identifier);
+            }
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        if (!raw) {
+            return res.status(404).json({
+                error: 'Agent not found',
+                message: `No agent found for identifier: ${identifier}`,
+            });
+        }
+        // Score and assess agent
+        const scored = await scoreAgent(raw);
+        // Create sentinel context with the scored agent
+        const context = {
+            allAgents: [scored],
+            scanTimestamp: Date.now(),
+        };
+        // Run full sentinel assessment
+        const verdict = assessAgent(scored, context);
+        // Cache the verdict
+        scoreCache.set(cacheKey, verdict);
+        return res.json({ data: verdict, cached: false });
+    }
+    catch (err) {
+        console.error('Sentinel assessment error:', err);
+        return res.status(502).json({
+            error: 'Upstream error',
+            message: 'Failed to perform sentinel assessment on agent',
+        });
+    }
+});
+// --- POST /v1/acp/trust-score (ACP-compatible trust score endpoint) ---
+app.post('/v1/acp/trust-score', async (req, res) => {
+    try {
+        const { walletAddress, agentId } = req.body;
+        // Validate input
+        if (!walletAddress && !agentId) {
+            return res.status(400).json({
+                error: 'Invalid request',
+                message: 'Body must include walletAddress or agentId',
+            });
+        }
+        const identifier = walletAddress || agentId;
+        // Validate identifier
+        if (!isValidIdentifier(identifier)) {
+            return res.status(400).json({
+                error: 'Invalid identifier',
+                message: 'Identifier must be a valid wallet address (0x...) or alphanumeric document ID',
+            });
+        }
+        const cacheKey = `acp-trust:${identifier.toLowerCase()}`;
+        // Check cache
+        const cached = scoreCache.get(cacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
+        // Circuit breaker check
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                service: 'VIGIL Trust Score',
+                version: '1.4.0',
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        // Fetch agent
+        let raw;
+        try {
+            if (identifier.startsWith('0x') && identifier.length === 42) {
+                raw = await fetchAgentByWallet(identifier);
+            }
+            else {
+                raw = await fetchAgentById(identifier);
+            }
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        if (!raw) {
+            return res.status(404).json({
+                service: 'VIGIL Trust Score',
+                version: '1.4.0',
+                error: 'Agent not found',
+                message: `No agent found for identifier: ${identifier}`,
+            });
+        }
+        // Score and assess agent
+        const scored = await scoreAgent(raw);
+        // Create sentinel context
+        const context = {
+            allAgents: [scored],
+            scanTimestamp: Date.now(),
+        };
+        // Run sentinel assessment
+        const verdict = assessAgent(scored, context);
+        // Build ACP-compatible response
+        const acpResponse = {
+            service: 'VIGIL Trust Score',
+            version: '1.4.0',
+            result: {
+                trustScore: scored.trustScore,
+                trustTier: scored.trustTier,
+                trustGrade: scored.trustGrade,
+                riskFlags: scored.riskFlags,
+                sybilRiskScore: scored.sybilRiskScore,
+                threatLevel: verdict.threatLevel,
+                sentinel: {
+                    alertCount: verdict.allAlerts.length,
+                    criticalCount: verdict.allAlerts.filter(a => a.severity === 'critical' || a.severity === 'emergency').length,
+                    verdict: verdict.threatLevel === 'SAFE' ? 'CLEAR' : 'FLAGGED',
+                },
+            },
+            pricing: {
+                cost: '1.00 USDC',
+                protocol: 'Virtuals ACP',
+            },
+        };
+        // Cache the response
+        scoreCache.set(cacheKey, acpResponse);
+        return res.json(acpResponse);
+    }
+    catch (err) {
+        console.error('ACP trust score error:', err);
+        return res.status(502).json({
+            service: 'VIGIL Trust Score',
+            version: '1.4.0',
+            error: 'Upstream error',
+            message: 'Failed to fetch trust score',
+        });
+    }
+});
+// --- GET /v1/alerts ---
+app.get('/v1/alerts', async (req, res) => {
+    try {
+        const cacheKey = 'alerts:recent';
+        const cached = leaderboardCache.get(cacheKey);
+        if (cached) {
+            return res.json({ ...cached, cached: true });
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                message: 'Upstream data source is temporarily unreachable.',
+            });
+        }
+        let result;
+        try {
+            result = await fetchAgentsPage(1, 100, 'grossAgenticAmount:desc');
+            recordUpstreamSuccess();
+        }
+        catch (upstreamErr) {
+            recordUpstreamFailure();
+            throw upstreamErr;
+        }
+        const agents = await Promise.all(result.data.map(scoreAgent));
+        const flagged = agents
+            .filter(a => a.riskFlags.length > 0)
+            .map(a => ({
+            name: a.name,
+            documentId: a.documentId,
+            walletAddress: a.walletAddress,
+            trustScore: a.trustScore,
+            trustTier: a.trustTier,
+            riskFlags: a.riskFlags,
+            daysSinceActive: a.daysSinceActive,
+            successRate: a.successRate,
+        }))
+            .sort((a, b) => a.trustScore - b.trustScore);
+        const response = {
+            data: flagged,
+            meta: {
+                totalFlagged: flagged.length,
+                totalScanned: agents.length,
+                timestamp: new Date().toISOString(),
+            },
+            cached: false,
+        };
+        leaderboardCache.set(cacheKey, response);
+        return res.json(response);
+    }
+    catch (err) {
+        console.error('Alerts error:', err);
+        return res.status(502).json({ error: 'Upstream error', message: 'Failed to fetch alerts' });
+    }
+});
+// --- GET /v1/history/:walletAddress ---
+app.get('/v1/history/:walletAddress', async (req, res) => {
+    const wallet = req.params.walletAddress;
+    if (!isValidIdentifier(wallet) || !wallet.startsWith('0x')) {
+        return res.status(400).json({
+            error: 'Invalid wallet address',
+            message: 'History requires a valid wallet address (0x...)',
+        });
+    }
+    const history = await getHistory(wallet);
+    if (!history) {
+        return res.status(404).json({
+            error: 'No history found',
+            message: 'No score history recorded for this agent yet. Query /v1/score/:address first.',
+        });
+    }
+    const hoursBack = clampInt(req.query.hours, 1, 168, 24);
+    const deltas = await getScoreDeltas(wallet, hoursBack);
+    return res.json({
+        data: {
+            walletAddress: history.walletAddress,
+            name: history.name,
+            firstSeen: new Date(history.firstSeen).toISOString(),
+            lastUpdated: new Date(history.lastUpdated).toISOString(),
+            snapshotCount: history.snapshots.length,
+            snapshots: history.snapshots.map(s => ({
+                ...s,
+                timestamp: new Date(s.timestamp).toISOString(),
+            })),
+            deltas,
+        },
+    });
+});
+// --- GET /v1/movers ---
+app.get('/v1/movers', async (req, res) => {
+    const hoursBack = clampInt(req.query.hours, 1, 168, 24);
+    const limit = clampInt(req.query.limit, 1, 50, 10);
+    const movers = await getRecentMovers(hoursBack, limit);
+    const histStats = await getHistoryStats();
+    return res.json({
+        data: movers.map(m => ({
+            ...m,
+            changeDirection: m.change > 0 ? '↑' : m.change < 0 ? '↓' : '—',
+        })),
+        meta: {
+            hoursBack,
+            timestamp: new Date().toISOString(),
+            ...histStats,
+        },
+    });
+});
+// --- POST /v1/evaluate ---
+// ACP-compatible evaluator endpoint — score a seller agent before approving a job
+app.post('/v1/evaluate', async (req, res) => {
+    try {
+        const { jobId, buyerAddress, sellerAddress, deliverable, serviceRequirement, memos } = req.body;
+        if (!sellerAddress) {
+            return res.status(400).json({
+                error: 'Missing required field',
+                message: 'sellerAddress is required for evaluation',
+            });
+        }
+        // Dynamic import to avoid loading evaluator module at startup
+        const { evaluateJob } = await import('./lib/evaluator.js');
+        const result = await evaluateJob({
+            jobId: jobId || 'manual',
+            buyerAddress: buyerAddress || 'unknown',
+            sellerAddress,
+            deliverable: deliverable || { type: 'unknown', value: null },
+            serviceRequirement: serviceRequirement || null,
+            memos: memos || [],
+        });
+        return res.json({
+            data: result,
+            cached: false,
+        });
+    }
+    catch (err) {
+        console.error('Evaluation error:', err);
+        return res.status(502).json({
+            error: 'Evaluation failed',
+            message: 'Failed to evaluate agent. ' + err.message,
+        });
+    }
+});
+// --- Batch Evaluation ---
+// Score multiple agents in one call — perfect for portfolio risk checks
+app.post('/v1/evaluate/batch', async (req, res) => {
+    try {
+        const { addresses } = req.body;
+        if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
+            return res.status(400).json({
+                error: 'Missing required field',
+                message: 'addresses must be a non-empty array of wallet addresses',
+            });
+        }
+        if (addresses.length > 20) {
+            return res.status(400).json({
+                error: 'Too many addresses',
+                message: 'Maximum 20 addresses per batch request',
+            });
+        }
+        const { evaluateJob } = await import('./lib/evaluator.js');
+        const startTime = Date.now();
+        const results = await Promise.allSettled(addresses.map((addr) => evaluateJob({
+            jobId: 'batch',
+            buyerAddress: 'batch-caller',
+            sellerAddress: addr,
+            deliverable: { type: 'batch', value: null },
+            serviceRequirement: null,
+            memos: [],
+        })));
+        const evaluations = results.map((r, i) => ({
+            address: addresses[i],
+            ...(r.status === 'fulfilled'
+                ? { success: true, ...r.value }
+                : { success: false, error: r.reason.message }),
+        }));
+        // Summary stats
+        const successful = evaluations.filter((e) => e.success);
+        const approved = successful.filter((e) => e.approved);
+        const rejected = successful.filter((e) => !e.approved);
+        const avgScore = successful.length > 0
+            ? Math.round(successful.reduce((sum, e) => sum + (e.sellerTrustScore || 0), 0) / successful.length)
+            : 0;
+        return res.json({
+            data: {
+                evaluations,
+                summary: {
+                    total: addresses.length,
+                    approved: approved.length,
+                    rejected: rejected.length,
+                    failed: results.filter(r => r.status === 'rejected').length,
+                    avgTrustScore: avgScore,
+                    batchDurationMs: Date.now() - startTime,
+                },
+            },
+            cached: false,
+        });
+    }
+    catch (err) {
+        console.error('Batch evaluation error:', err);
+        return res.status(502).json({
+            error: 'Batch evaluation failed',
+            message: err.message,
+        });
+    }
+});
+// --- Watchlist / Portfolio Monitor ---
+// Check a set of agents and flag any changes or risks since last check
+app.post('/v1/watchlist/check', async (req, res) => {
+    try {
+        const { addresses, thresholds } = req.body;
+        if (!addresses || !Array.isArray(addresses) || addresses.length === 0) {
+            return res.status(400).json({
+                error: 'Missing required field',
+                message: 'addresses must be a non-empty array of wallet addresses',
+            });
+        }
+        if (addresses.length > 50) {
+            return res.status(400).json({
+                error: 'Too many addresses',
+                message: 'Maximum 50 addresses per watchlist check',
+            });
+        }
+        const minScore = thresholds?.minScore ?? 25;
+        const flagOnRiskFlags = thresholds?.flagOnRiskFlags ?? true;
+        const startTime = Date.now();
+        // Score agents sequentially to avoid upstream rate limits
+        const results = [];
+        for (const addr of addresses) {
+            try {
+                if (!isUpstreamAvailable())
+                    throw new Error('Upstream unavailable');
+                const raw = await fetchAgentByWallet(addr);
+                if (!raw)
+                    throw new Error(`Agent not found: ${addr}`);
+                recordUpstreamSuccess();
+                const scored = await scoreAgent(raw);
+                let sentinel = null;
+                try {
+                    const context = {
+                        allAgents: [scored],
+                        scanTimestamp: Date.now(),
+                    };
+                    sentinel = assessAgent(scored, context);
+                }
+                catch (_sentinelErr) {
+                    // Sentinel scan is best-effort; continue without it
+                }
+                results.push({ status: 'fulfilled', value: { scored, sentinel } });
+            }
+            catch (err) {
+                recordUpstreamFailure();
+                results.push({ status: 'rejected', reason: err });
+            }
+        }
+        const agents = results.map((r, i) => {
+            if (r.status === 'rejected') {
+                return {
+                    address: addresses[i],
+                    status: 'error',
+                    error: r.reason.message,
+                };
+            }
+            const { scored, sentinel } = r.value;
+            const alerts = [];
+            if (scored.trustScore < minScore) {
+                alerts.push(`SCORE_BELOW_THRESHOLD: ${scored.trustScore} < ${minScore}`);
+            }
+            if (flagOnRiskFlags && scored.riskFlags.length > 0) {
+                alerts.push(`RISK_FLAGS: ${scored.riskFlags.join(', ')}`);
+            }
+            if (sentinel && (sentinel.threatLevel === 'CRITICAL' || sentinel.threatLevel === 'EMERGENCY')) {
+                alerts.push(`SENTINEL_THREAT: ${sentinel.threatLevel}`);
+            }
+            return {
+                address: addresses[i],
+                name: scored.name,
+                status: alerts.length > 0 ? 'alert' : 'ok',
+                trustScore: scored.trustScore,
+                trustTier: scored.trustTier,
+                riskFlags: scored.riskFlags,
+                sentinelThreat: sentinel?.threatLevel ?? 'UNKNOWN',
+                alerts,
+            };
+        });
+        const alertCount = agents.filter(a => a.status === 'alert').length;
+        const errorCount = agents.filter(a => a.status === 'error').length;
+        return res.json({
+            data: {
+                agents,
+                summary: {
+                    total: addresses.length,
+                    ok: agents.filter(a => a.status === 'ok').length,
+                    alerts: alertCount,
+                    errors: errorCount,
+                    checkDurationMs: Date.now() - startTime,
+                },
+                thresholds: { minScore, flagOnRiskFlags },
+            },
+            cached: false,
+        });
+    }
+    catch (err) {
+        console.error('Watchlist check error:', err);
+        return res.status(502).json({
+            error: 'Watchlist check failed',
+            message: err.message,
+        });
+    }
+});
+// --- Quick Trust Check ---
+// One-call trust gate for any agent — returns approve/deny in <500ms
+// Designed for inline use: if (await vigil.check(addr)).safe) { proceed }
+app.get('/v1/trust/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        const threshold = clampInt(req.query.threshold, 0, 100, 50);
+        if (!isValidIdentifier(identifier)) {
+            return res.status(400).json({ error: 'Invalid identifier' });
+        }
+        // Check cache first
+        const cacheKey = `trust:${identifier}`;
+        const cached = scoreCache.get(cacheKey);
+        if (cached) {
+            const c = cached;
+            return res.json({
+                data: {
+                    safe: c.trustScore >= threshold,
+                    score: c.trustScore,
+                    tier: c.trustTier,
+                    grade: c.trustGrade,
+                    flags: c.riskFlags,
+                    name: c.name,
+                    threshold,
+                },
+                cached: true,
+            });
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+        }
+        const raw = identifier.startsWith('0x') && identifier.length === 42
+            ? await fetchAgentByWallet(identifier)
+            : await fetchAgentById(identifier);
+        if (!raw) {
+            return res.status(404).json({
+                data: { safe: false, score: -1, tier: 'UNKNOWN', grade: 'F', flags: ['NOT_FOUND'], name: null, threshold },
+            });
+        }
+        recordUpstreamSuccess();
+        const scored = await scoreAgent(raw);
+        scoreCache.set(cacheKey, scored);
+        return res.json({
+            data: {
+                safe: scored.trustScore >= threshold,
+                score: scored.trustScore,
+                tier: scored.trustTier,
+                grade: scored.trustGrade,
+                flags: scored.riskFlags,
+                name: scored.name,
+                threshold,
+            },
+            cached: false,
+        });
+    }
+    catch (err) {
+        recordUpstreamFailure();
+        console.error('Trust check error:', err);
+        return res.status(502).json({ error: 'Trust check failed', message: err.message });
+    }
+});
+// --- Top Agents by Category ---
+// Returns the most trusted agents, optionally filtered — useful for discovery
+app.get('/v1/top', async (req, res) => {
+    try {
+        const limit = clampInt(req.query.limit, 1, 50, 10);
+        const minScore = clampInt(req.query.minScore, 0, 100, 50);
+        const role = (req.query.role || '').toUpperCase();
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+        }
+        const response = await fetchAgentsPage(1, 100);
+        if (!response || !response.data || response.data.length === 0) {
+            return res.json({ data: { agents: [], total: 0, filters: { minScore, role: role || 'ALL', limit } }, cached: false });
+        }
+        recordUpstreamSuccess();
+        const allScored = await Promise.all(response.data.map((r) => scoreAgent(r)));
+        let filtered = allScored
+            .filter((a) => a.trustScore >= minScore)
+            .sort((a, b) => b.trustScore - a.trustScore);
+        if (role && ['PROVIDER', 'BUYER', 'HYBRID'].includes(role)) {
+            filtered = filtered.filter((a) => a.role === role);
+        }
+        const top = filtered.slice(0, limit).map((a) => ({
+            name: a.name,
+            walletAddress: a.walletAddress,
+            documentId: a.documentId,
+            trustScore: a.trustScore,
+            trustTier: a.trustTier,
+            trustGrade: a.trustGrade,
+            role: a.role,
+            successRate: a.successRate,
+            revenue: a.revenue,
+            jobCount: a.jobCount,
+            riskFlags: a.riskFlags,
+        }));
+        return res.json({
+            data: {
+                agents: top,
+                total: filtered.length,
+                filters: { minScore, role: role || 'ALL', limit },
+            },
+            cached: false,
+        });
+    }
+    catch (err) {
+        recordUpstreamFailure();
+        console.error('Top agents error:', err);
+        return res.status(502).json({ error: 'Failed to fetch top agents', message: err.message });
+    }
+});
+// --- Risk Scan (deep) ---
+// Full risk analysis combining trust score + sentinel + behavioral flags
+app.get('/v1/risk/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        if (!isValidIdentifier(identifier)) {
+            return res.status(400).json({ error: 'Invalid identifier' });
+        }
+        if (!isUpstreamAvailable()) {
+            return res.status(503).json({ error: 'Upstream temporarily unavailable' });
+        }
+        const raw = identifier.startsWith('0x') && identifier.length === 42
+            ? await fetchAgentByWallet(identifier)
+            : await fetchAgentById(identifier);
+        if (!raw) {
+            return res.status(404).json({ error: 'Agent not found' });
+        }
+        recordUpstreamSuccess();
+        const scored = await scoreAgent(raw);
+        let sentinel = null;
+        try {
+            const context = { allAgents: [scored], scanTimestamp: Date.now() };
+            sentinel = assessAgent(scored, context);
+        }
+        catch (_) { /* sentinel best-effort */ }
+        // Build risk profile
+        const riskFactors = [];
+        if (scored.trustScore < 25)
+            riskFactors.push('CRITICALLY_LOW_TRUST_SCORE');
+        if (scored.trustScore < 50)
+            riskFactors.push('BELOW_AVERAGE_TRUST');
+        if (scored.successRate < 50)
+            riskFactors.push('LOW_SUCCESS_RATE');
+        if (scored.walletBalance <= 0)
+            riskFactors.push('EMPTY_WALLET');
+        if (scored.daysSinceActive > 30)
+            riskFactors.push('DORMANT');
+        if (scored.uniqueBuyerCount <= 1)
+            riskFactors.push('CONCENTRATED_CLIENT_BASE');
+        if (scored.sybilRiskScore > 50)
+            riskFactors.push('SYBIL_RISK_ELEVATED');
+        if (scored.regressionScore < 50)
+            riskFactors.push('PERFORMANCE_DECLINING');
+        const riskLevel = riskFactors.length === 0 ? 'LOW'
+            : riskFactors.length <= 2 ? 'MODERATE'
+                : riskFactors.length <= 4 ? 'HIGH'
+                    : 'CRITICAL';
+        return res.json({
+            data: {
+                agent: {
+                    name: scored.name,
+                    walletAddress: scored.walletAddress,
+                    documentId: scored.documentId,
+                },
+                riskLevel,
+                trustScore: scored.trustScore,
+                trustTier: scored.trustTier,
+                trustGrade: scored.trustGrade,
+                riskFactors,
+                riskFlags: scored.riskFlags,
+                sentinel: sentinel ? {
+                    threatLevel: sentinel.threatLevel,
+                    alerts: sentinel.allAlerts?.length || 0,
+                    escalation: sentinel.crossSentinelEscalation,
+                } : null,
+                recommendation: riskLevel === 'LOW' ? 'SAFE_TO_TRANSACT'
+                    : riskLevel === 'MODERATE' ? 'PROCEED_WITH_CAUTION'
+                        : riskLevel === 'HIGH' ? 'ADDITIONAL_VERIFICATION_RECOMMENDED'
+                            : 'DO_NOT_TRANSACT',
+                scoreBreakdown: {
+                    reliability: scored.reliabilityScore,
+                    activity: scored.activityScore,
+                    economic: scored.economicScore,
+                    reputation: scored.reputationScore,
+                    longevity: scored.longevityScore,
+                    behavioral: scored.behavioralScore,
+                    complexity: scored.complexityScore,
+                    sustainability: scored.sustainabilityScore,
+                    sybilRisk: scored.sybilRiskScore,
+                    regression: scored.regressionScore,
+                },
+            },
+            cached: false,
+        });
+    }
+    catch (err) {
+        recordUpstreamFailure();
+        console.error('Risk scan error:', err);
+        return res.status(502).json({ error: 'Risk scan failed', message: err.message });
+    }
+});
+// ============================================================
+//  DEGENCLAW — HTML render helpers
+// ============================================================
+function dcEscape(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+function dcGradeColor(grade) {
+    return { A: '#10b981', B: '#22c55e', C: '#eab308', D: '#f97316', F: '#ef4444' }[grade] || '#64748b';
+}
+function dcTierBlurb(tier) {
+    const blurbs = {
+        SHARP: 'Strong risk-adjusted returns on a robust sample.',
+        SOLID: 'Process is working. Metrics hold up under scrutiny.',
+        DEVELOPING: 'Mixed signals. More data needed before confident call.',
+        RISKY: 'Capital at elevated risk given current metrics.',
+        DANGER: 'High probability of further losses. Exercise extreme caution.',
+        UNPROVEN: 'Insufficient trade history for a confident rating.',
+    };
+    return blurbs[tier] || '';
+}
+function renderDegenClawScoreCard(r) {
+    const color = dcGradeColor(r.trustGrade);
+    const rowBar = (label, val) => `<div class="bar-row"><span class="bar-label">${dcEscape(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${val}%;background:${color}"></div></div><span class="bar-val">${val}</span></div>`;
+    const flagList = (items, cls, prefix) => items.length === 0 ? '' :
+        `<ul class="flag-list ${cls}">${items.map(f => `<li>${prefix} ${dcEscape(f)}</li>`).join('')}</ul>`;
+    return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VIGIL Risk Score — ${dcEscape(r.agentName)} | DegenClaw</title>
+<meta name="description" content="VIGIL Trust Score ${r.trustScore}/100 (${r.trustGrade}) for ${dcEscape(r.agentName)} — ${dcTierBlurb(r.trustTier)}"/>
+<meta property="og:title" content="VIGIL Risk Score: ${dcEscape(r.agentName)} — ${r.trustGrade} (${r.trustScore}/100)"/>
+<meta property="og:description" content="${dcEscape(dcTierBlurb(r.trustTier))}"/>
+<style>
+:root{--bg:#0b0d12;--card:#13161d;--ink:#e8ecf1;--muted:#8892a6;--line:#20242d;--accent:${color};}
+*{box-sizing:border-box}body{margin:0;font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:760px;margin:0 auto;padding:32px 20px 60px}
+.topbar{display:flex;align-items:center;gap:12px;margin-bottom:32px}
+.logo{font-weight:800;letter-spacing:0.02em;font-size:20px}
+.logo span{color:var(--muted);font-weight:500;font-size:14px;margin-left:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 28px 22px;margin-bottom:18px}
+.score-row{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.score-main h1{margin:0 0 4px;font-size:26px;font-weight:700}
+.score-main .sub{color:var(--muted);font-size:14px;margin-bottom:0}
+.grade{display:flex;flex-direction:column;align-items:center;min-width:120px}
+.grade-letter{font-size:72px;font-weight:800;line-height:1;color:var(--accent)}
+.grade-num{font-size:14px;color:var(--muted);margin-top:4px}
+.tier{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:0.04em;background:var(--accent);color:#0b0d12;margin-top:10px}
+.tier-blurb{color:var(--muted);font-size:14px;margin-top:10px}
+.section-title{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 12px;font-weight:600}
+.bar-row{display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:14px}
+.bar-label{min-width:120px;color:var(--muted)}
+.bar-track{flex:1;height:8px;background:#1a1e26;border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s}
+.bar-val{min-width:32px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-top:6px}
+.stat{background:#0f1218;border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
+.stat-val{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.flag-list{padding:0;margin:8px 0 0;list-style:none;font-size:14px}
+.flag-list li{padding:6px 10px;border-radius:6px;margin-bottom:6px}
+.flag-list.red li{background:#2a1414;color:#fca5a5}
+.flag-list.green li{background:#102418;color:#86efac}
+.reasoning{color:var(--muted);font-size:14px;margin-top:10px}.reasoning p{margin:6px 0}
+.foot{font-size:12px;color:var(--muted);padding:16px 0 0;border-top:1px solid var(--line);margin-top:22px;line-height:1.5}
+a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
+</style></head><body><div class="wrap">
+<div class="topbar"><div class="logo">VIGIL<span>Trust Score for the AI Agent Economy</span></div></div>
+<div class="card"><div class="score-row">
+<div class="score-main">
+<h1>${dcEscape(r.agentName)}${r.tokenSymbol ? ` <span style="color:var(--muted);font-weight:400">$${dcEscape(r.tokenSymbol)}</span>` : ''}</h1>
+<div class="sub">DegenClaw Arena · Rank #${r.leaderboardRank} · <a href="https://degen.virtuals.io" target="_blank" rel="noopener">view on DegenClaw</a></div>
+<div class="tier">${r.trustTier}</div><div class="tier-blurb">${dcTierBlurb(r.trustTier)}</div>
+</div>
+<div class="grade"><div class="grade-letter">${r.trustGrade}</div><div class="grade-num">${r.trustScore} / 100</div></div>
+</div></div>
+<div class="card"><h3 class="section-title">VIGIL Dimensions</h3>
+${rowBar('Profitability', r.profitability)}${rowBar('Consistency', r.consistency)}${rowBar('Discipline', r.discipline)}${rowBar('Capital Risk', r.capitalRisk)}${rowBar('Sample Size', r.sampleSize)}
+</div>
+<div class="card"><h3 class="section-title">Raw Metrics</h3><div class="stats">
+<div class="stat"><div class="stat-label">Realized PnL</div><div class="stat-val">$${r.raw.totalRealizedPnl.toFixed(0)}</div></div>
+<div class="stat"><div class="stat-label">Avg ROE</div><div class="stat-val">${(r.raw.avgRoe * 100).toFixed(0)}%</div></div>
+<div class="stat"><div class="stat-label">Win Rate</div><div class="stat-val">${(r.raw.winRate * 100).toFixed(0)}%</div></div>
+<div class="stat"><div class="stat-label">Profit Factor</div><div class="stat-val">${r.raw.profitFactor.toFixed(2)}</div></div>
+<div class="stat"><div class="stat-label">Sortino</div><div class="stat-val">${r.raw.sortinoRatio.toFixed(2)}</div></div>
+<div class="stat"><div class="stat-label">Trades</div><div class="stat-val">${r.raw.totalTradeCount}</div></div>
+<div class="stat"><div class="stat-label">Volume</div><div class="stat-val">$${r.raw.totalTradeVolume.toFixed(0)}</div></div>
+</div></div>
+${(r.greenFlags.length > 0 || r.flags.length > 0) ? `<div class="card"><h3 class="section-title">Signals</h3>${flagList(r.greenFlags, 'green', '✓')}${flagList(r.flags, 'red', '⚠')}</div>` : ''}
+<div class="card"><h3 class="section-title">Reasoning</h3><div class="reasoning">${r.reasoning.map(p => `<p>${dcEscape(p)}</p>`).join('')}</div></div>
+<div class="foot"><strong>${dcEscape(r.disclaimer)}</strong><br/>Wallet: <code>${dcEscape(r.wallet)}</code><br/>Scored: ${r.scoredAt} · Source: ${r.dataSource}<br/>JSON: <a href="/v1/degenclaw/${encodeURIComponent(r.agentName)}">/v1/degenclaw/${dcEscape(r.agentName)}</a> · All agents: <a href="/degenclaw">/degenclaw</a></div>
+</div></body></html>`;
+}
+function renderDegenClawNotFound(query) {
+    return `<!doctype html><html><head><meta charset="utf-8"/><title>Not found — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px}p{color:#8892a6}a{color:#60a5fa}</style></head><body><div class="box"><h1>No DegenClaw agent found for "${dcEscape(query)}"</h1><p>Try the agent name exactly as shown on <a href="https://degen.virtuals.io" target="_blank">degen.virtuals.io</a>, its id, or its wallet address.</p><p>Browse the full leaderboard at <a href="/degenclaw">/degenclaw</a></p></div></body></html>`;
+}
+function renderDegenClawError(query, msg) {
+    return `<!doctype html><html><head><meta charset="utf-8"/><title>Error — VIGIL × DegenClaw</title><style>body{margin:0;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{max-width:520px;text-align:center}h1{font-size:22px;margin:0 0 12px;color:#ef4444}p{color:#8892a6}code{background:#1a1e26;padding:2px 6px;border-radius:4px;word-break:break-all}</style></head><body><div class="box"><h1>Upstream error</h1><p>We couldn't fetch data for "${dcEscape(query)}" right now.</p><p><code>${dcEscape(msg)}</code></p><p>Try again in a few seconds.</p></div></body></html>`;
+}
+function renderDegenClawIndex(all) {
+    const top = [...all].sort((a, b) => b.trustScore - a.trustScore).slice(0, 25);
+    const bottom = [...all].filter(r => r.raw.totalTradeCount >= 10).sort((a, b) => a.trustScore - b.trustScore).slice(0, 10);
+    const row = (r) => `<tr><td class="rank">#${r.leaderboardRank}</td><td><a href="/degenclaw/${encodeURIComponent(r.agentName)}">${dcEscape(r.agentName)}</a></td><td class="grade" style="color:${dcGradeColor(r.trustGrade)}">${r.trustGrade}</td><td class="num">${r.trustScore}</td><td class="num">$${r.raw.totalRealizedPnl.toFixed(0)}</td><td class="num">${(r.raw.winRate * 100).toFixed(0)}%</td><td class="num">${r.raw.sortinoRatio.toFixed(2)}</td><td class="num">${r.raw.totalTradeCount}</td></tr>`;
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>VIGIL × DegenClaw — Risk Rankings for Every Arena Agent</title><meta name="description" content="Independent VIGIL trust scores for every AI agent trading Hyperliquid perps in the DegenClaw Arena."/><style>body{margin:0;font:15px/1.55 -apple-system,system-ui,sans-serif;background:#0b0d12;color:#e8ecf1}.wrap{max-width:960px;margin:0 auto;padding:32px 20px 60px}h1{font-size:28px;margin:0 0 6px}.lede{color:#8892a6;max-width:640px;margin-bottom:32px}h2{font-size:15px;text-transform:uppercase;letter-spacing:0.08em;color:#8892a6;margin:28px 0 12px;font-weight:600}table{width:100%;border-collapse:collapse;background:#13161d;border:1px solid #20242d;border-radius:10px;overflow:hidden}th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #20242d;font-size:14px}th{background:#0f1218;color:#8892a6;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:600}tr:last-child td{border-bottom:none}td.rank{color:#8892a6;font-variant-numeric:tabular-nums}td.num{text-align:right;font-variant-numeric:tabular-nums}td.grade{font-weight:700;font-size:16px}a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}.foot{color:#8892a6;font-size:12px;margin-top:28px;line-height:1.6}</style></head><body><div class="wrap"><h1>VIGIL × DegenClaw Arena</h1><p class="lede">Independent risk ratings for every AI agent trading Hyperliquid perps. DegenClaw's own AI Council ranks by expected return — VIGIL rates by downside risk. <em>Not investment advice.</em></p><h2>Top 25 by VIGIL Trust Score</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${top.map(row).join('')}</tbody></table><h2>Bottom 10 — Elevated Risk (min 10 trades)</h2><table><thead><tr><th>DC Rank</th><th>Agent</th><th>Grade</th><th>Score</th><th>PnL</th><th>Win</th><th>Sortino</th><th>Trades</th></tr></thead><tbody>${bottom.map(row).join('')}</tbody></table><div class="foot">VIGIL Trust Score is informational only — not investment advice, not a recommendation to subscribe, not a guarantee of future performance.<br/>Data from <a href="https://degen.virtuals.io" target="_blank" rel="noopener">degen.virtuals.io</a> public leaderboard · updated every 60s<br/>JSON: <a href="/v1/degenclaw/leaderboard">/v1/degenclaw/leaderboard</a></div></div></body></html>`;
+}
+// ============================================================
+//  DEGENCLAW — Risk scoring for Hyperliquid trading agents
+// ============================================================
+app.get('/v1/degenclaw/leaderboard', async (req, res) => {
+    try {
+        const limit = clampInt(req.query.limit, 1, 1000, 100);
+        const sort = String(req.query.sort || 'trustScore');
+        const order = String(req.query.order || 'desc') === 'asc' ? 1 : -1;
+        // Whitelist allowed sort fields
+        const allowedSorts = ['trustScore', 'trustGrade', 'profitability', 'consistency', 'discipline', 'capitalRisk', 'sampleSize', 'agentName', 'leaderboardRank'];
+        const sortField = allowedSorts.includes(sort) ? sort : 'trustScore';
+        const all = await scoreAllDegenClawAgents();
+        const sorted = all.sort((a, b) => {
+            const av = a[sortField] ?? 0;
+            const bv = b[sortField] ?? 0;
+            return (av - bv) * order;
+        });
+        return res.json({
+            data: sorted.slice(0, limit).map((r) => ({
+                agentId: r.agentId, agentName: r.agentName, tokenSymbol: r.tokenSymbol,
+                wallet: r.wallet, leaderboardRank: r.leaderboardRank,
+                trustScore: r.trustScore, trustGrade: r.trustGrade, trustTier: r.trustTier,
+                profitability: r.profitability, consistency: r.consistency, discipline: r.discipline,
+                capitalRisk: r.capitalRisk, sampleSize: r.sampleSize,
+                raw: r.raw, flags: r.flags, greenFlags: r.greenFlags,
+                permalink: `/degenclaw/${encodeURIComponent(r.agentName)}`,
+            })),
+            meta: {
+                total: all.length, returned: Math.min(limit, all.length),
+                sort: sortField, order: order === 1 ? 'asc' : 'desc',
+                dataSource: 'degenclaw-leaderboard-v1',
+                scoredAt: new Date().toISOString(),
+                disclaimer: 'VIGIL Trust Score is informational only — not investment advice.',
+            },
+        });
+    }
+    catch (err) {
+        return res.status(502).json({ error: 'DEGENCLAW_UPSTREAM_ERROR', message: err.message });
+    }
+});
+app.get('/v1/degenclaw/:agent', async (req, res) => {
+    try {
+        const query = decodeURIComponent(String(req.params.agent || '')).trim();
+        if (!query)
+            return res.status(400).json({ error: 'MISSING_AGENT', message: 'Agent name, id, or wallet required' });
+        const report = await scoreDegenClawByQuery(query);
+        if (!report)
+            return res.status(404).json({ error: 'AGENT_NOT_FOUND', message: `No DegenClaw agent found for "${query}".` });
+        return res.json(report);
+    }
+    catch (err) {
+        return res.status(502).json({ error: 'DEGENCLAW_UPSTREAM_ERROR', message: err.message });
+    }
+});
+app.get('/degenclaw/:agent', async (req, res) => {
+    const query = decodeURIComponent(String(req.params.agent || '')).trim();
+    try {
+        const report = await scoreDegenClawByQuery(query);
+        if (!report) {
+            res.status(404).type('html').send(renderDegenClawNotFound(query));
+            return;
+        }
+        res.type('html').send(renderDegenClawScoreCard(report));
+    }
+    catch (err) {
+        res.status(502).type('html').send(renderDegenClawError(query, err.message));
+    }
+});
+app.get('/degenclaw', async (_req, res) => {
+    try {
+        const all = await scoreAllDegenClawAgents();
+        res.type('html').send(renderDegenClawIndex(all));
+    }
+    catch (err) {
+        res.status(502).type('html').send(renderDegenClawError('leaderboard', err.message));
+    }
+});
+// ============================================================
+//  POLYMARKET — Prediction Market Agent Scoring
+//  PROPRIETARY: Calibration scoring measures genuine predictive
+//  skill vs. speed arb vs. luck. Nobody else computes this.
+// ============================================================
+// JSON API: score a Polymarket trader by wallet
+// IMPORTANT: Guard against reserved sub-route names that would be caught by :wallet
+app.get('/v1/polymarket/:wallet', async (req, res, next) => {
+    const reserved = ['compare', 'search', 'recent', 'discover', 'leaderboard'];
+    if (reserved.includes(req.params.wallet))
+        return next();
+    try {
+        const wallet = String(req.params.wallet || '').trim();
+        if (!wallet || !wallet.startsWith('0x')) {
+            return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+        }
+        // Check prescore cache first — 2 hour TTL
+        const walletLower = wallet.toLowerCase();
+        const cached = prescoredCache.get(walletLower);
+        const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+        if (cached && (Date.now() - cached.cachedAt) < TWO_HOURS_MS) {
+            const { cachedAt, ...report } = cached;
+            return res.json({ ...report, cached: true, cachedAt });
+        }
+        // Not cached or expired — score normally
+        const report = await scorePolymarketTrader(wallet);
+        if (!report) {
+            return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
+        }
+        // Update prescore cache
+        prescoredCache.set(walletLower, {
+            ...report,
+            cachedAt: Date.now(),
+        });
+        addRecentScore(report);
+        return res.json(report);
+    }
+    catch (err) {
+        return res.status(502).json({ error: 'POLYMARKET_UPSTREAM_ERROR', message: err.message });
+    }
+});
+// Search endpoint — resolve username/partial to wallet and redirect
+app.get('/polymarket/search', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q)
+        return res.redirect('/');
+    const wallet = resolveWalletIdentifier(q);
+    if (wallet)
+        return res.redirect(`/polymarket/${wallet}`);
+    // Not in cache — try as raw wallet address anyway
+    if (q.startsWith('0x') && q.length >= 40)
+        return res.redirect(`/polymarket/${q}`);
+    // Unknown username — show not found
+    res.status(404).type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Not Found</title></head>
+  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center">
+    <div style="font-size:28px;font-weight:800;letter-spacing:3px;margin-bottom:16px">VIGIL</div>
+    <div style="font-size:18px;color:#ef4444;margin-bottom:12px">Username "${hEsc(q)}" not found</div>
+    <p style="color:#6b7280;max-width:400px">Try pasting a full wallet address (0x...), or search for a trader who has been scored recently. The username cache grows as more wallets get scored.</p>
+    <a href="/" style="margin-top:20px;color:#3b82f6;text-decoration:none">Back to VIGIL</a>
+  </body></html>`);
+});
+// JSON search endpoint
+app.get('/v1/polymarket/search', (req, res) => {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (!q)
+        return res.json({ results: [] });
+    const results = [];
+    for (const [name, wallet] of usernameToWallet) {
+        if (name.includes(q))
+            results.push({ name, wallet });
+        if (results.length >= 10)
+            break;
+    }
+    res.json({ query: q, results });
+});
+// HTML score card for a Polymarket trader
+app.get('/polymarket/:wallet', async (req, res, next) => {
+    if (['compare', 'search', 'leaderboard'].includes(req.params.wallet))
+        return next();
+    let wallet = String(req.params.wallet || '').trim();
+    // If not a wallet address, try username resolution
+    if (!wallet.startsWith('0x')) {
+        const resolved = resolveWalletIdentifier(wallet);
+        if (resolved)
+            return res.redirect(`/polymarket/${resolved}`);
+        return res.status(404).type('html').send(renderPolymarketNotFound(wallet));
+    }
+    try {
+        const report = await scorePolymarketTrader(wallet);
+        if (!report) {
+            res.status(404).type('html').send(renderPolymarketNotFound(wallet));
+            return;
+        }
+        addRecentScore(report);
+        res.type('html').send(renderPolymarketScoreCard(report));
+    }
+    catch (err) {
+        res.status(502).type('html').send(renderPolymarketError(wallet, err.message));
+    }
+});
+// HTML index (landing page for /polymarket)
+app.get('/polymarket', (_req, res) => {
+    res.type('html').send(renderPolymarketIndex());
+});
+// JSON API: recently scored wallets
+app.get('/v1/polymarket/recent', (_req, res) => {
+    res.json(recentScores);
+});
+// ============================================================
+//  OG IMAGE GENERATOR — branded SVG scorecard for social sharing
+// ============================================================
+app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
+    try {
+        const wallet = String(req.params.wallet || '').trim();
+        const report = await scorePolymarketTrader(wallet);
+        if (!report)
+            return res.status(404).send('Not found');
+        const gc = report.trustGrade === 'A' ? '#10b981' : report.trustGrade === 'B' ? '#3b82f6' : report.trustGrade === 'C' ? '#eab308' : report.trustGrade === 'D' ? '#f97316' : '#ef4444';
+        const pnl = report.raw.totalPnl;
+        const pnlStr = pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
+        const pnlColor = pnl >= 0 ? '#10b981' : '#ef4444';
+        const name = report.displayName.length > 20 ? report.displayName.slice(0, 18) + '...' : report.displayName;
+        const confDesc = report.confidence?.description || `${report.trustGrade}/${report.trustScore}`;
+        const dims = [
+            { label: 'Calibration', val: report.calibration, weight: '25%' },
+            { label: 'Live Edge', val: report.liveEdge ?? 50, weight: '25%' },
+            { label: 'Profitability', val: report.profitability, weight: '15%' },
+            { label: 'Consistency', val: report.consistency, weight: '15%' },
+            { label: 'Discipline', val: report.discipline, weight: '10%' },
+            { label: 'Sample Size', val: report.sampleSize, weight: '10%' },
+        ];
+        const dimBars = dims.map((d, i) => {
+            const y = 200 + i * 34;
+            const barWidth = Math.max(2, (d.val / 100) * 240);
+            const barColor = d.val >= 65 ? '#10b981' : d.val >= 35 ? '#eab308' : '#ef4444';
+            return `
+        <text x="40" y="${y + 13}" fill="#9ca3af" font-size="12" font-family="system-ui,sans-serif">${d.label}</text>
+        <text x="155" y="${y + 13}" fill="#4b5563" font-size="9" font-family="system-ui,sans-serif">${d.weight}</text>
+        <rect x="185" y="${y + 1}" width="240" height="12" rx="6" fill="#1f2937"/>
+        <rect x="185" y="${y + 1}" width="${barWidth}" height="12" rx="6" fill="${barColor}"/>
+        <text x="432" y="${y + 13}" fill="#fff" font-size="12" font-weight="700" font-family="system-ui,sans-serif">${d.val}</text>
+      `;
+        }).join('');
+        // Skill vs Luck bar
+        const skill = report.calibrationReport?.skillDecomposition?.skill ?? 0;
+        const luck = report.calibrationReport?.skillDecomposition?.luck ?? 0;
+        const hasSkillData = skill > 0 || luck > 0;
+        const skillBarWidth = hasSkillData ? Math.max(10, (skill / (skill + luck)) * 200) : 0;
+        const luckBarWidth = hasSkillData ? 200 - skillBarWidth : 0;
+        const skillLuckSvg = hasSkillData ? `
+      <text x="40" y="420" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Skill vs Luck</text>
+      <rect x="185" y="410" width="${skillBarWidth}" height="14" rx="${luckBarWidth > 0 ? '7 0 0 7' : '7'}" fill="#10b981"/>
+      <rect x="${185 + skillBarWidth}" y="410" width="${luckBarWidth}" height="14" rx="${skillBarWidth > 0 ? '0 7 7 0' : '7'}" fill="#6366f1"/>
+      <text x="395" y="422" fill="#9ca3af" font-size="10" font-family="system-ui,sans-serif">${skill.toFixed(0)}% / ${luck.toFixed(0)}%</text>
+    ` : '';
+        const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 600 315">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0a"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="315" fill="url(#bg)"/>
+  <rect x="0" y="0" width="600" height="3" fill="${gc}"/>
+  <rect x="0" y="312" width="600" height="3" fill="${gc}" opacity="0.3"/>
+
+  <!-- Logo -->
+  <text x="40" y="35" fill="#a78bfa" font-size="16" font-weight="800" letter-spacing="4" font-family="system-ui,sans-serif">VIGIL</text>
+  <text x="115" y="35" fill="#4b5563" font-size="11" font-family="system-ui,sans-serif">Trust Score</text>
+
+  <!-- Grade circle -->
+  <circle cx="520" cy="75" r="48" fill="${gc}12" stroke="${gc}" stroke-width="2.5"/>
+  <text x="520" y="88" fill="${gc}" font-size="44" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
+  <text x="520" y="136" fill="#fff" font-size="22" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
+  <text x="520" y="152" fill="#6b7280" font-size="10" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustTier}</text>
+
+  <!-- Trader info -->
+  <text x="40" y="68" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
+  <text x="40" y="85" fill="#6b7280" font-size="10" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
+  <text x="40" y="105" fill="#4b5563" font-size="10" font-family="system-ui,sans-serif">${hEsc(confDesc)}</text>
+
+  <!-- Key metrics row -->
+  <text x="40" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
+  <text x="40" y="153" fill="${pnlColor}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
+
+  <text x="155" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
+  <text x="155" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
+
+  <text x="255" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
+  <text x="255" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
+
+  <text x="340" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Brier</text>
+  <text x="340" y="153" fill="${report.calibrationReport.brierScore < 0.2 ? '#10b981' : report.calibrationReport.brierScore < 0.3 ? '#eab308' : '#ef4444'}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.calibrationReport.brierScore.toFixed(3)}</text>
+
+  <!-- Divider -->
+  <line x1="40" y1="170" x2="460" y2="170" stroke="#1f2937" stroke-width="1"/>
+
+  <!-- Dimension bars header -->
+  <text x="40" y="190" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
+  ${dimBars}
+
+  <!-- Skill vs Luck -->
+  ${skillLuckSvg}
+
+  <!-- Footer -->
+  <rect x="0" y="290" width="600" height="25" fill="#06080e"/>
+  <text x="40" y="306" fill="#374151" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
+  <text x="300" y="306" fill="#374151" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
+  <text x="560" y="306" fill="#374151" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
+</svg>`;
+        res.set('Content-Type', 'image/svg+xml');
+        res.set('Cache-Control', 'public, max-age=3600');
+        res.send(svg);
+    }
+    catch (err) {
+        res.status(500).send('OG generation failed');
+    }
+});
+// ============================================================
+//  COMPARE ENDPOINT — side-by-side wallet scorecards
+// ============================================================
+app.get('/v1/polymarket/compare', async (req, res) => {
+    try {
+        const walletsParam = String(req.query.wallets || '');
+        const wallets = walletsParam.split(',').map(w => w.trim().toLowerCase()).filter(w => w.startsWith('0x'));
+        if (wallets.length < 2 || wallets.length > 5) {
+            return res.status(400).json({ error: 'INVALID_PARAMS', message: 'Provide 2-5 comma-separated wallet addresses via ?wallets=0x...,0x...' });
+        }
+        const results = await Promise.allSettled(wallets.map(w => scorePolymarketTrader(w)));
+        const scores = results.map((r, i) => {
+            if (r.status === 'fulfilled' && r.value) {
+                return r.value;
+            }
+            return { wallet: wallets[i], error: 'No data found', trustScore: null, trustGrade: null };
+        });
+        res.json({
+            compared: scores.length,
+            wallets: scores,
+            scoredAt: new Date().toISOString(),
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: 'COMPARE_FAILED', message: err.message });
+    }
+});
+// HTML: side-by-side compare page
+app.get('/polymarket/compare', async (req, res) => {
+    try {
+        const walletsParam = String(req.query.wallets || '');
+        const wallets = walletsParam.split(',').map(w => w.trim().toLowerCase()).filter(w => w.startsWith('0x'));
+        if (wallets.length < 2 || wallets.length > 5) {
+            return res.status(400).type('html').send(`<html><body style="background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center"><h2>Compare 2-5 wallets</h2><p style="color:#6b7280">Usage: /polymarket/compare?wallets=0x...,0x...</p></body></html>`);
+        }
+        const results = await Promise.allSettled(wallets.map(w => scorePolymarketTrader(w)));
+        const cards = results.map((r, i) => {
+            if (r.status !== 'fulfilled' || !r.value) {
+                return `<div style="flex:1;min-width:200px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937"><p style="color:#ef4444">No data for ${wallets[i].slice(0, 8)}...</p></div>`;
+            }
+            const d = r.value;
+            const gc = d.trustGrade === 'A' ? '#10b981' : d.trustGrade === 'B' ? '#3b82f6' : d.trustGrade === 'C' ? '#eab308' : d.trustGrade === 'D' ? '#f97316' : '#ef4444';
+            const totalPnl = d.raw.totalPnl;
+            const pnl = totalPnl >= 0 ? `+$${Math.round(totalPnl).toLocaleString()}` : `-$${Math.round(Math.abs(totalPnl)).toLocaleString()}`;
+            const pnlColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
+            const name = d.displayName || d.wallet.slice(0, 10) + '...';
+            const dims = [
+                ['Calibration', d.calibration],
+                ['Live Edge', d.liveEdge ?? '-'],
+                ['Profitability', d.profitability],
+                ['Consistency', d.consistency],
+                ['Discipline', d.discipline],
+                ['Sample Size', d.sampleSize],
+            ];
+            const dimRows = dims.map(([label, val]) => {
+                const v = typeof val === 'number' ? val : 0;
+                return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:#6b7280">${label}</span><span style="color:#fff;font-weight:600">${val}</span></div>`;
+            }).join('');
+            return `<div style="flex:1;min-width:220px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937">
+        <div style="text-align:center;margin-bottom:12px">
+          <div style="display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:${gc}20;color:${gc};font-size:24px;font-weight:800;border:2px solid ${gc}40">${d.trustGrade}</div>
+          <div style="font-size:28px;font-weight:800;color:#fff;margin-top:4px">${d.trustScore}</div>
+          <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">${d.trustTier}</div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#fff;text-align:center;margin-bottom:4px">${hEsc(name)}</div>
+        <div style="font-size:11px;color:#4b5563;text-align:center;font-family:monospace;margin-bottom:12px">${d.wallet.slice(0, 10)}...${d.wallet.slice(-4)}</div>
+        <div style="text-align:center;font-size:18px;font-weight:700;color:${pnlColor};margin-bottom:12px">${pnl}</div>
+        <div style="border-top:1px solid #1f2937;padding-top:10px">${dimRows}</div>
+        <a href="/polymarket/${d.wallet}" style="display:block;text-align:center;margin-top:12px;padding:6px;background:#1f2937;border-radius:6px;color:#9ca3af;text-decoration:none;font-size:11px;font-weight:600">Full Scorecard &rarr;</a>
+      </div>`;
+        }).join('');
+        res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL Compare</title></head>
+    <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+      <div style="max-width:1000px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:24px"><a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a><span style="color:#6b7280;font-size:13px;margin-left:12px">Compare</span></div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${cards}</div>
+        <div style="text-align:center;margin-top:20px;color:#374151;font-size:11px">VIGIL Trust Score is informational only.</div>
+      </div>
+    </body></html>`);
+    }
+    catch (err) {
+        res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${pmEscape(err.message)}</body></html>`);
+    }
+});
+// ============================================================
+//  WALLET DISCOVERY & SKILL LEADERBOARD (v1.18.0)
+//  Crawl resolved markets, discover skilled wallets, surface A/B grades
+// ============================================================
+// JSON: Skill-based leaderboard — top wallets ranked by actual forecasting ability
+app.get('/v1/polymarket/leaderboard/skill', (_req, res) => {
+    const leaderboard = getSkillLeaderboard();
+    const status = getCrawlerStatus();
+    if (leaderboard.length === 0) {
+        return res.json({
+            status: 'empty',
+            message: status.lastCrawl
+                ? 'Leaderboard was built but no qualified wallets found yet. Try again later.'
+                : 'Leaderboard not yet built. Trigger a crawl via POST /v1/polymarket/discover/crawl or wait for the next scheduled run.',
+            crawlerStatus: status,
+            entries: [],
+        });
+    }
+    // Grade distribution
+    const grades = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+    for (const e of leaderboard)
+        grades[e.trustGrade] = (grades[e.trustGrade] || 0) + 1;
+    res.json({
+        status: 'ok',
+        total: leaderboard.length,
+        gradeDistribution: grades,
+        lastCrawl: status.lastCrawl,
+        entries: leaderboard,
+    });
+});
+// JSON: Crawler status
+app.get('/v1/polymarket/discover/status', (_req, res) => {
+    res.json(getCrawlerStatus());
+});
+// Trigger a discovery crawl (POST to avoid accidental triggers)
+app.post('/v1/polymarket/discover/crawl', async (req, res) => {
+    const status = getCrawlerStatus();
+    if (status.crawlInProgress) {
+        return res.json({ status: 'already_running', ...status });
+    }
+    // Parse optional params
+    const maxMarkets = Math.min(Number(req.query.maxMarkets) || 100, 500);
+    const minVolume = Number(req.query.minVolume) || 50000;
+    const maxToScore = Math.min(Number(req.query.maxToScore) || 200, 500);
+    // Start crawl in background — return immediately
+    res.json({
+        status: 'started',
+        message: `Crawling up to ${maxMarkets} resolved markets, will score up to ${maxToScore} wallets. Check /v1/polymarket/discover/status for progress.`,
+        params: { maxMarkets, minVolume, maxToScore },
+    });
+    // Fire and forget — the crawl updates the in-memory leaderboard
+    runDiscoveryCrawl({ maxMarkets, minVolume, maxToScore }).then(result => {
+        console.log(`[VIGIL] Discovery crawl finished:`, result);
+    }).catch(err => {
+        console.error(`[VIGIL] Discovery crawl failed:`, err);
+    });
+});
+// HTML: Skill Leaderboard page
+app.get('/polymarket/leaderboard', (_req, res) => {
+    const leaderboard = getSkillLeaderboard();
+    const status = getCrawlerStatus();
+    const gradeColor = (g) => {
+        switch (g) {
+            case 'A': return '#10b981';
+            case 'B': return '#3b82f6';
+            case 'C': return '#f59e0b';
+            case 'D': return '#ef4444';
+            default: return '#6b7280';
+        }
+    };
+    let rows = '';
+    if (leaderboard.length === 0) {
+        rows = `<tr><td colspan="7" style="text-align:center;padding:40px;color:#6b7280">No data yet. The discovery crawler runs periodically — check back soon.</td></tr>`;
+    }
+    else {
+        rows = leaderboard.slice(0, 100).map((e, i) => {
+            const gc = gradeColor(e.trustGrade);
+            const pnl = e.realizedPnl >= 0
+                ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
+                : `<span style="color:#ef4444">-$${Math.round(Math.abs(e.realizedPnl)).toLocaleString()}</span>`;
+            const bss = e.brierSkillScore >= 0
+                ? `<span style="color:#10b981">+${(e.brierSkillScore * 100).toFixed(0)}%</span>`
+                : `<span style="color:#ef4444">${(e.brierSkillScore * 100).toFixed(0)}%</span>`;
+            const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
+            return `<tr style="border-bottom:1px solid #1f2937">
+        <td style="padding:10px 8px;color:#6b7280">${i + 1}</td>
+        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none">${pmEscape(name)}</a></td>
+        <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700">${e.trustGrade}/${e.trustScore}</span></td>
+        <td style="padding:10px 8px;text-align:center">${bss}</td>
+        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${(e.calibrationError * 100).toFixed(1)}%</td>
+        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${e.resolvedBets}</td>
+        <td style="padding:10px 8px;text-align:right">${pnl}</td>
+      </tr>`;
+        }).join('');
+    }
+    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title></head>
+  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+    <div style="max-width:900px;margin:0 auto">
+      <div style="text-align:center;margin-bottom:24px">
+        <a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a>
+        <span style="color:#6b7280;font-size:13px;margin-left:12px">Skill Leaderboard</span>
+      </div>
+      <p style="text-align:center;color:#9ca3af;font-size:14px;margin-bottom:20px">
+        Wallets ranked by actual forecasting skill — calibration, Brier Skill Score, and resolution — not PnL.
+        ${status.lastCrawl ? `<br><span style="color:#374151;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
+      </p>
+
+      <div style="max-width:480px;margin:0 auto 28px auto;text-align:center">
+        <form onsubmit="var w=document.getElementById('lb-wallet').value.trim();if(!w)return false;window.location.href='/polymarket/'+encodeURIComponent(w);return false" style="display:flex;gap:8px">
+          <input id="lb-wallet" type="text" placeholder="Score any wallet — paste 0x address or username" style="flex:1;background:#111827;border:1px solid #374151;border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;outline:none" />
+          <button type="submit" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Score</button>
+        </form>
+        <div style="margin-top:8px;font-size:11px;color:#374151">Not on the leaderboard? Check any Polymarket wallet instantly.</div>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead>
+          <tr style="border-bottom:2px solid #1f2937;color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:1px">
+            <th style="padding:8px;text-align:left">#</th>
+            <th style="padding:8px;text-align:left">Trader</th>
+            <th style="padding:8px;text-align:center">Grade</th>
+            <th style="padding:8px;text-align:center">BSS</th>
+            <th style="padding:8px;text-align:center">Cal Error</th>
+            <th style="padding:8px;text-align:center">Resolved</th>
+            <th style="padding:8px;text-align:right">PnL</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="text-align:center;margin-top:24px;color:#374151;font-size:11px">
+        VIGIL Trust Score is informational only — not investment advice.<br>
+        <a href="/methodology" style="color:#4b5563;text-decoration:none">Methodology</a> ·
+        <a href="/v1/polymarket/leaderboard/skill" style="color:#4b5563;text-decoration:none">JSON API</a>
+      </div>
+    </div>
+  </body></html>`);
+});
+// ============================================================
+//  ON-CHAIN VERIFICATION ENDPOINTS (v1.11.0)
+// ============================================================
+// JSON: wallet provenance report from Basescan
+app.get('/v1/onchain/:wallet', async (req, res) => {
+    try {
+        if (!isBasescanConfigured()) {
+            return res.status(503).json({ error: 'BASESCAN_NOT_CONFIGURED', message: 'BASESCAN_API_KEY env var not set.' });
+        }
+        const wallet = String(req.params.wallet || '').trim();
+        if (!wallet || !wallet.startsWith('0x')) {
+            return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+        }
+        const provenance = await getWalletProvenance(wallet);
+        if (!provenance) {
+            return res.status(502).json({ error: 'BASESCAN_ERROR', message: 'Failed to fetch on-chain data.' });
+        }
+        return res.json(provenance);
+    }
+    catch (err) {
+        return res.status(502).json({ error: 'BASESCAN_ERROR', message: err.message });
+    }
+});
+// JSON: quick sybil check
+app.get('/v1/onchain/:wallet/sybil', async (req, res) => {
+    try {
+        if (!isBasescanConfigured()) {
+            return res.status(503).json({ error: 'BASESCAN_NOT_CONFIGURED', message: 'BASESCAN_API_KEY env var not set.' });
+        }
+        const wallet = String(req.params.wallet || '').trim();
+        if (!wallet || !wallet.startsWith('0x')) {
+            return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+        }
+        const result = await quickSybilCheck(wallet);
+        if (!result) {
+            return res.status(502).json({ error: 'BASESCAN_ERROR', message: 'Failed to check wallet.' });
+        }
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: 'BASESCAN_ERROR', message: err.message });
+    }
+});
+// JSON: system status for on-chain layer
+app.get('/v1/onchain/status', (_req, res) => {
+    res.json({
+        configured: isBasescanConfigured(),
+        chain: 'Base (8453)',
+        capabilities: [
+            'wallet-provenance',
+            'sybil-detection',
+            'pnl-verification',
+            'protocol-fingerprinting',
+        ],
+        apiVersion: 'etherscan-v2',
+    });
+});
+// ============================================================
+//  POLYMARKET HTML RENDERERS
+// ============================================================
+function pmEscape(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function pmGradeColor(grade) {
+    switch (grade) {
+        case 'A': return '#10b981';
+        case 'B': return '#34d399';
+        case 'C': return '#eab308';
+        case 'D': return '#f97316';
+        default: return '#ef4444';
+    }
+}
+function pmBarColor(grade) {
+    switch (grade) {
+        case 'A':
+        case 'B': return '#10b981';
+        case 'C': return '#eab308';
+        default: return '#ef4444';
+    }
+}
+function renderPolymarketScoreCard(r) {
+    const gc = pmGradeColor(r.trustGrade);
+    const bc = pmBarColor(r.trustGrade);
+    const dims = [
+        { label: 'Calibration', val: r.calibration },
+        { label: 'Profitability', val: r.profitability },
+        { label: 'Consistency', val: r.consistency },
+        { label: 'Discipline', val: r.discipline },
+        { label: 'Sample Size', val: r.sampleSize },
+        { label: 'Live Edge', val: r.liveEdge ?? 50 },
+    ];
+    const greenFlagsHtml = r.greenFlags.map(f => `<div class="signal green">\u2713 ${pmEscape(f)}</div>`).join('');
+    const flagsHtml = r.flags.map(f => `<div class="signal red">\u26A0 ${pmEscape(f)}</div>`).join('');
+    const calBucketsHtml = r.calibrationReport.buckets.map(b => `<tr><td>${b.range}</td><td>${b.totalBets}</td><td>${(b.expectedRate * 100).toFixed(0)}%</td><td>${(b.actualRate * 100).toFixed(0)}%</td><td>${(b.error * 100).toFixed(1)}%</td></tr>`).join('');
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL x ${pmEscape(r.displayName)} - Polymarket Trust Score</title>
+<meta property="og:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
+<meta property="og:description" content="Trust Score ${r.trustScore}/100 | ${r.trustTier} | ${r.raw.resolvedBets} resolved bets | PnL: ${r.raw.totalPnl >= 0 ? '+' : '-'}$${Math.round(Math.abs(r.raw.totalPnl)).toLocaleString()}">
+<meta property="og:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
+<meta name="twitter:description" content="${r.trustTier} | ${r.raw.resolvedBets} resolved bets">
+<meta name="twitter:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+.hdr{font-size:14px;color:#6b7280;margin-bottom:24px}.hdr b{color:#a78bfa}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
+.hero{display:flex;justify-content:space-between;align-items:flex-start}
+.name{font-size:28px;font-weight:700;color:#fff}.wallet{font-size:12px;color:#6b7280;font-family:monospace;word-break:break-all}
+.tier{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;background:${gc}22;color:${gc};border:1px solid ${gc}44}
+.blurb{color:#9ca3af;margin-top:8px;font-size:14px}
+.grade{font-size:64px;font-weight:800;color:${gc};text-align:right}.score-num{font-size:16px;color:#9ca3af;text-align:right}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
+.dim{display:flex;align-items:center;margin-bottom:10px}.dim-label{width:120px;font-size:14px;color:#9ca3af}
+.dim-bar{flex:1;height:10px;background:#1f2937;border-radius:5px;overflow:hidden;margin:0 12px}
+.dim-fill{height:100%;background:${bc};border-radius:5px}.dim-val{font-size:14px;color:#fff;min-width:30px;text-align:right}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.metric{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:12px}
+.metric-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px}
+.metric-val{font-size:20px;font-weight:700;color:#fff}
+.signal{padding:8px 16px;border-radius:6px;margin-bottom:6px;font-size:13px}
+.green{background:#10b98115;color:#10b981;border:1px solid #10b98130}
+.red{background:#ef444415;color:#ef4444;border:1px solid #ef444430}
+.cal-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+.cal-table th{text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid #1f2937}
+.cal-table td{padding:6px 8px;border-bottom:1px solid #1f293744}
+.skill-bar{display:flex;gap:4px;margin-top:8px;height:24px;border-radius:6px;overflow:hidden}
+.skill-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff}
+.foot{margin-top:24px;font-size:11px;color:#4b5563;text-align:center;line-height:1.8}
+.foot a{color:#6b7280}
+</style></head><body>
+<div class="hdr"><b>VIGIL</b> Trust Score for the AI Agent Economy</div>
+<div class="card"><div class="hero"><div>
+<div class="name">${pmEscape(r.displayName)}</div>
+<div class="wallet">${pmEscape(r.wallet)}</div>
+<div>Polymarket Trader</div>
+<div class="tier">${r.trustTier}</div>
+<div class="blurb">${r.trustTier === 'SHARP' ? 'Elite calibration. Metrics hold up under scrutiny.' : r.trustTier === 'SOLID' ? 'Process is working. Metrics hold up under scrutiny.' : r.trustTier === 'DEVELOPING' ? 'Mixed signals. More data needed.' : r.trustTier === 'UNPROVEN' ? 'Insufficient resolved bets for calibration.' : r.trustTier === 'RISKY' ? 'Below-average risk profile. Proceed with caution.' : 'High probability of further losses.'}</div>
+</div><div><div class="grade">${r.trustGrade}</div><div class="score-num">${r.trustScore} / 100</div></div></div></div>
+
+<div class="card"><div class="sec-title">VIGIL Dimensions</div>
+${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div class="dim-bar"><div class="dim-fill" style="width:${d.val}%"></div></div><div class="dim-val">${d.val}</div></div>`).join('')}
+</div>
+
+<div class="card"><div class="sec-title">Raw Metrics</div><div class="metrics">
+<div class="metric"><div class="metric-label">Total PnL</div><div class="metric-val">$${r.raw.totalPnl}</div></div>
+<div class="metric"><div class="metric-label">Win Rate</div><div class="metric-val">${Math.round(r.raw.winRate * 100)}%</div></div>
+<div class="metric"><div class="metric-label">Resolved Bets</div><div class="metric-val">${r.raw.resolvedBets}</div></div>
+<div class="metric"><div class="metric-label">Total Trades</div><div class="metric-val">${r.raw.totalTrades}</div></div>
+<div class="metric"><div class="metric-label">Volume</div><div class="metric-val">$${Math.round(r.raw.totalVolume)}</div></div>
+<div class="metric"><div class="metric-label">Markets</div><div class="metric-val">${r.raw.uniqueMarkets}</div></div>
+<div class="metric"><div class="metric-label">Brier Score</div><div class="metric-val">${r.calibrationReport.brierScore}</div></div>
+<div class="metric"><div class="metric-label">Open Positions</div><div class="metric-val">${r.raw.openPositions}</div></div>
+<div class="metric"><div class="metric-label">Brier Skill</div><div class="metric-val" style="color:${r.calibrationReport.brierSkillScore > 0 ? '#10b981' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div></div>
+<div class="metric"><div class="metric-label">Log Loss</div><div class="metric-val">${r.calibrationReport.logLoss.toFixed(3)}</div></div>
+</div></div>
+
+${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-title">Calibration Analysis</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
+<table class="cal-table"><tr><th>Bucket</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Error</th></tr>${calBucketsHtml}</table>
+<div style="margin-top:12px"><span style="font-size:12px;color:#6b7280">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
+
+<div style="margin-top:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Reliability (CAL)</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.calibration < 0.03 ? '#10b981' : r.calibrationReport.brierDecomposition.calibration < 0.08 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.calibration.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Lower = better calibrated</div>
+</div>
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Resolution (RES)</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.resolution > 0.05 ? '#10b981' : r.calibrationReport.brierDecomposition.resolution > 0.01 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.resolution.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Higher = stronger opinions</div>
+</div>
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div>
+<div style="font-size:10px;color:#4b5563">vs naive baseline</div>
+</div>
+</div>
+
+<div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Log Loss</div>
+<div style="font-size:18px;font-weight:700;color:#fff">${r.calibrationReport.logLoss.toFixed(4)}</div>
+<div style="font-size:10px;color:#4b5563">Skill: ${(r.calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive — sensitive to rare events</div>
+</div>
+${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
+<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Timeliness</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.timeliness.timelinessScore >= 60 ? '#10b981' : r.calibrationReport.timeliness.timelinessScore >= 30 ? '#eab308' : '#ef4444'}">${r.calibrationReport.timeliness.timelinessScore}/100</div>
+<div style="font-size:10px;color:#4b5563">Avg ${r.calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)}d before resolution, ${(r.calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover</div>
+</div>` : ''}
+</div>
+</div>` : ''}
+
+${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill vs. Luck Decomposition</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:12px">How much of returns came from genuine predictive skill vs. variance?</p>
+<div class="skill-bar">
+<div class="skill-seg" style="flex:${r.calibrationReport.skillDecomposition.skill};background:#10b981">Skill ${r.calibrationReport.skillDecomposition.skill.toFixed(0)}%</div>
+<div class="skill-seg" style="flex:${Math.max(r.calibrationReport.skillDecomposition.luck, 1)};background:#6366f1">Luck ${r.calibrationReport.skillDecomposition.luck.toFixed(0)}%</div>
+</div></div>` : ''}
+
+<div class="card"><div class="sec-title">Signals</div>${greenFlagsHtml}${flagsHtml}</div>
+
+${r.onChain?.provenance ? `<div class="card"><div class="sec-title">On-Chain Verification (${r.onChain.provenance.chainId === 137 ? 'Polygon' : 'Base'})</div>
+<div class="metrics">
+<div class="metric"><div class="metric-label">Wallet Age</div><div class="metric-val">${r.onChain.provenance.walletAgeDays}d</div></div>
+<div class="metric"><div class="metric-label">Txns on Base</div><div class="metric-val">${r.onChain.provenance.totalTransactions}</div></div>
+<div class="metric"><div class="metric-label">Counterparties</div><div class="metric-val">${r.onChain.provenance.uniqueCounterparties}</div></div>
+<div class="metric"><div class="metric-label">USDC In</div><div class="metric-val">$${Math.round(r.onChain.provenance.totalUsdcIn)}</div></div>
+<div class="metric"><div class="metric-label">USDC Out</div><div class="metric-val">$${Math.round(r.onChain.provenance.totalUsdcOut)}</div></div>
+<div class="metric"><div class="metric-label">Provenance</div><div class="metric-val" style="color:${r.onChain.provenance.provenanceGrade === 'A' ? '#10b981' : r.onChain.provenance.provenanceGrade === 'B' ? '#3b82f6' : r.onChain.provenance.provenanceGrade === 'C' ? '#eab308' : '#ef4444'}">${r.onChain.provenance.provenanceGrade} (${r.onChain.provenance.provenanceScore})</div></div>
+</div>
+${r.onChain.provenance.protocolsUsed.length > 0 ? `<div style="margin-top:12px;font-size:13px;color:#9ca3af">Protocols: ${r.onChain.provenance.protocolsUsed.join(', ')}</div>` : ''}
+${r.onChain.pnlDivergence !== null ? `<div style="margin-top:8px;font-size:13px;color:${r.onChain.pnlVerified ? '#10b981' : '#ef4444'}">PnL ${r.onChain.pnlVerified ? 'verified' : 'divergence'}: $${r.onChain.pnlDivergence} gap between API and on-chain USDC</div>` : ''}
+${r.onChain.provenance.greenFlags.map(f => `<div class="signal green" style="margin-top:6px">\u2713 ${pmEscape(f)}</div>`).join('')}
+${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top:6px">\u26A0 ${pmEscape(f)}</div>`).join('')}
+</div>` : r.onChain === null ? `<div class="card"><div class="sec-title">On-Chain Verification</div><p style="font-size:13px;color:#6b7280">On-chain verification not available. Basescan API key not configured.</p></div>` : ''}
+
+<div class="card"><div class="sec-title">Reasoning</div>
+${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
+</div>
+
+<div class="card" style="background:#0d1117;border:1px solid #1f2937">
+<div class="sec-title">What Does ${r.trustGrade}/${r.trustScore} Mean?</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:8px;line-height:1.6">
+${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Their predictions are well-calibrated and consistently beat naive baselines.' :
+        r.trustGrade === 'B' ? 'This trader shows genuine forecasting skill with a meaningful edge across multiple markets.' :
+            r.trustGrade === 'C' ? 'This trader shows some skill signal, but not enough to clearly distinguish from luck. More data needed.' :
+                r.trustGrade === 'D' ? 'Below average. The data shows poor calibration, thin evidence, or both. When this trader expresses high confidence, events don\'t happen at the rate they imply.' :
+                    'No demonstrated forecasting skill. This trader performs at or below random chance based on available data.'}
+</p>
+<p style="font-size:12px;color:#6b7280;line-height:1.6">
+<strong style="color:#9ca3af">Confidence:</strong> ${r.confidence.description}. ${r.confidence.margin <= 5 ? 'This score is highly reliable — enough resolved bets to be confident.' : r.confidence.margin <= 10 ? 'Moderate confidence — score may shift as more markets resolve.' : 'Low confidence — take this score with a grain of salt until more markets resolve.'}
+</p>
+<p style="font-size:11px;color:#4b5563;margin-top:8px">Methodology: Brier Score Decomposition (Murphy 1973), Log Loss, On-Chain USDC Verification. Same approach used by IARPA to identify superforecasters.</p>
+</div>
+
+<div class="card" style="text-align:center;background:#0d1117">
+<div class="sec-title">Share This Score</div>
+<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:#1d9bf0;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Post on X</a>
+<button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='Copied!'}.bind(this))" style="padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;border:none;cursor:pointer">Copy Link</button>
+<a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Score Card Image</a>
+</div>
+</div>
+
+<div class="foot"><strong>Not financial advice.</strong> VIGIL Trust Score is informational only.<br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
+</body></html>`;
+}
+function renderPolymarketNotFound(wallet) {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Trader Not Found</title>
+<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#ef4444;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<body><div><h1>404</h1><p>No Polymarket activity found for <code>${pmEscape(wallet)}</code>.</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
+}
+function renderPolymarketError(wallet, message) {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>VIGIL - Error</title>
+<style>body{font-family:-apple-system,sans-serif;background:#0a0e1a;color:#d1d5db;display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center}h1{color:#f97316;font-size:48px}p{color:#6b7280}a{color:#a78bfa}</style></head>
+<body><div><h1>502</h1><p>Error scoring <code>${pmEscape(wallet)}</code>: ${pmEscape(message)}</p><p><a href="/polymarket">Back to index</a></p></div></body></html>`;
+}
+function renderPolymarketIndex() {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL x Polymarket - Prediction Market Trust Scoring</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
+h1{font-size:32px;color:#fff;margin-bottom:8px}h1 span{color:#a78bfa}
+.sub{color:#9ca3af;font-size:14px;margin-bottom:32px;font-style:italic}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px}
+.sec-title{text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:12px}
+.feature{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
+.feat-title{color:#fff;font-weight:600;font-size:15px}.feat-desc{color:#9ca3af;font-size:13px}
+code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px;color:#a78bfa}
+.foot{margin-top:32px;font-size:11px;color:#4b5563;text-align:center}
+</style></head><body>
+<h1><span>VIGIL</span> x Polymarket</h1>
+<div class="sub">Independent trust scoring for prediction market traders. Calibration-first methodology. <em>Not investment advice.</em></div>
+
+<div class="card"><div class="sec-title">The Proprietary Layer: Calibration Scoring</div>
+<div class="feature"><div><div class="feat-title">Calibration Analysis</div><div class="feat-desc">When a trader buys YES at $0.70, they imply 70% probability. We check: does the event actually happen 70% of the time? This separates genuine skill from speed arb and luck.</div></div></div>
+<div class="feature"><div><div class="feat-title">Skill vs. Luck Decomposition</div><div class="feat-desc">Returns decomposed into Skill (calibration-weighted alpha), Luck (variance residual). Know what you are buying before you copy-trade.</div></div></div>
+<div class="feature"><div><div class="feat-title">Brier Score + 6-Dimension Trust Rating</div><div class="feat-desc">Calibration (25%), Live Edge (25%), Profitability (15%), Consistency (15%), Discipline (10%), Sample Size (10%).</div></div></div>
+</div>
+
+<div class="card"><div class="sec-title">Score Any Trader</div>
+<p style="font-size:14px;color:#9ca3af;margin-bottom:12px">Paste any Polymarket wallet address:</p>
+<p><code>/polymarket/0x...</code> (HTML card)</p>
+<p><code>/v1/polymarket/0x...</code> (JSON API)</p>
+</div>
+
+<div class="card"><div class="sec-title">What Makes This Different</div>
+<p style="font-size:14px;color:#9ca3af">Every other Polymarket leaderboard ranks by raw P&L. 14 of the top 20 most profitable wallets are bots running structural arbitrage. VIGIL scores what actually matters: <strong style="color:#fff">can this trader predict the future?</strong></p>
+</div>
+
+<div class="foot">VIGIL Trust Score is informational only.<br/><a href="/degenclaw" style="color:#6b7280">DegenClaw Scoring</a> | <a href="/v1" style="color:#6b7280">API Docs</a></div>
+</body></html>`;
+}
+// ============================================================
+//  MOAT LAYER — Time-series snapshots & grade history
+//  Every call to /v1/internal/snapshot writes a permanent row
+//  per agent into degenclaw_snapshots. This is the ONLY part of
+//  VIGIL a competitor cannot retroactively backfill.
+// ============================================================
+// Trigger a snapshot write. Protected by SNAPSHOT_KEY env var so
+// only the scheduled task / cron can hit it.
+app.post('/v1/internal/snapshot', async (req, res) => {
+    const providedKey = String(req.headers['x-snapshot-key'] || '').trim();
+    const expectedKey = (process.env.SNAPSHOT_KEY || '').trim();
+    if (!expectedKey) {
+        return res.status(503).json({ error: 'SNAPSHOT_KEY_NOT_CONFIGURED', message: 'Server has no SNAPSHOT_KEY set — cannot accept snapshot writes.' });
+    }
+    // Use timing-safe comparison to prevent timing attacks
+    let keysMatch = false;
+    try {
+        keysMatch = timingSafeEqual(Buffer.from(providedKey), Buffer.from(expectedKey));
+    }
+    catch {
+        // Buffer lengths don't match, keys are definitely not equal
+        keysMatch = false;
+    }
+    if (!keysMatch) {
+        return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    try {
+        const result = await writeDegenClawSnapshot();
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(500).json({ error: 'SNAPSHOT_FAILED', message: err.message });
+    }
+});
+// Public moat stats — "we have N days of history and X total snapshots"
+app.get('/v1/moat/stats', async (_req, res) => {
+    try {
+        const stats = await getSnapshotStats();
+        return res.json({
+            ...stats,
+            note: 'Time-series history for DegenClaw agents. Every row is a permanent snapshot. Competitors cannot backfill past data.',
+        });
+    }
+    catch (err) {
+        return res.status(500).json({ error: 'STATS_FAILED', message: err.message });
+    }
+});
+// Grade-history timeline for a single agent (JSON).
+app.get('/v1/degenclaw/:agent/history', async (req, res) => {
+    try {
+        const agent = decodeURIComponent(String(req.params.agent || '')).trim();
+        if (!agent)
+            return res.status(400).json({ error: 'MISSING_AGENT' });
+        const days = Math.min(365, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
+        const history = await getDegenClawAgentHistory(agent, days);
+        return res.json({ agent, days, count: history.length, history });
+    }
+    catch (err) {
+        return res.status(500).json({ error: 'HISTORY_FAILED', message: err.message });
+    }
+});
+// --- API Documentation root ---
+app.get('/v1', (_req, res) => {
+    res.json({
+        service: 'VIGIL Trust Score API',
+        version: '1.17.0',
+        description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
+        endpoints: {
+            'GET /v1/health': 'Service health check + upstream status + rate limit info',
+            'GET /v1/score/:identifier': 'Trust score for a single agent (wallet address or documentId)',
+            'GET /v1/leaderboard': 'Paginated agent rankings (query: page, pageSize, tier, category, sort, order)',
+            'GET /v1/search?q=': 'Search agents by name or symbol',
+            'GET /v1/ecosystem/health': 'Aggregated ecosystem statistics',
+            'GET /v1/compare?ids=id1,id2': 'Compare 2-5 agents side by side',
+            'GET /v1/sentinel/:identifier': 'Full 12-sentinel security scan (returns SentinelVerdict)',
+            'POST /v1/acp/trust-score': 'ACP-compatible trust score endpoint (body: {walletAddress|agentId})',
+            'GET /v1/alerts': 'Agents with active risk flags',
+            'GET /v1/history/:walletAddress': 'Score history + trends for an agent (query: hours)',
+            'GET /v1/movers': 'Agents with biggest score changes (query: hours, limit)',
+            'POST /v1/evaluate': 'ACP evaluator — score seller trustworthiness before approving a job (body: {sellerAddress, jobId?, buyerAddress?, deliverable?})',
+            'POST /v1/evaluate/batch': 'Batch evaluate up to 20 agents at once (body: {addresses: string[]})',
+            'POST /v1/watchlist/check': 'Monitor a portfolio of agents for risk changes (body: {addresses: string[], thresholds?: {minScore?, flagOnRiskFlags?}})',
+            'GET /v1/trust/:identifier': 'Quick trust gate — returns safe/unsafe + score in <500ms (query: threshold=50)',
+            'GET /v1/top': 'Most trusted agents in the ecosystem (query: limit, minScore, role)',
+            'GET /v1/risk/:identifier': 'Deep risk analysis — trust + sentinel + behavioral factors + recommendation',
+            'GET /v1/degenclaw/leaderboard': 'VIGIL risk scores for every DegenClaw Arena agent (query: limit, sort, order)',
+            'GET /v1/degenclaw/:agent': 'VIGIL risk report for a single DegenClaw agent (name, id, or wallet)',
+            'GET /degenclaw/:agent': 'Public HTML score card for a DegenClaw agent — shareable permalink',
+            'GET /degenclaw': 'Public HTML index of the DegenClaw leaderboard ranked by VIGIL trust score',
+            'GET /v1/degenclaw/:agent/history': 'Time-series grade history for a DegenClaw agent (query: days, default 30)',
+            'GET /v1/moat/stats': 'Public moat stats — total snapshots, unique agents, days of history',
+            'POST /v1/internal/snapshot': 'Trigger a full snapshot write (requires X-Snapshot-Key header)',
+            'GET /v1/polymarket/:wallet': 'VIGIL trust report + calibration scoring for a Polymarket trader',
+            'GET /polymarket/:wallet': 'Public HTML score card with calibration analysis',
+            'GET /polymarket': 'Polymarket prediction market trust scoring index',
+            'GET /v1/onchain/:wallet': 'On-chain wallet provenance report from Base via Basescan',
+            'GET /v1/onchain/:wallet/sybil': 'Quick sybil check (wallet age + tx count)',
+            'GET /v1/onchain/status': 'On-chain verification layer status',
+        },
+        scoring: {
+            dimensions: {
+                reliability: '30% — success rate + job volume',
+                activity: '25% — recency + transaction volume',
+                economic: '20% — revenue + aGDP + wallet health',
+                reputation: '15% — unique buyers + graduation + offerings',
+                longevity: '10% — account age + consistency',
+            },
+            tiers: Object.entries(TIER_CONFIG).map(([key, val]) => ({
+                tier: key,
+                label: val.label,
+                range: key === 'ELITE' ? '80-100' :
+                    key === 'TRUSTED' ? '60-79' :
+                        key === 'ESTABLISHED' ? '40-59' :
+                            key === 'EMERGING' ? '20-39' :
+                                key === 'NEW' ? '0-19' :
+                                    key === 'INACTIVE' ? 'N/A' : 'Flagged',
+            })),
+        },
+        rateLimit: {
+            maxRequests: RATE_LIMIT_MAX,
+            windowMs: RATE_LIMIT_WINDOW_MS,
+            note: 'Rate limit headers included in every response',
+        },
+        links: {
+            twitter: 'https://twitter.com/VIGIL_Trust',
+            token: '0xFe19FEfC9B05d1a52e95C3d2a4daD0448C8f3BA6 (Base)',
+            acp: 'https://app.virtuals.io/acp/agents/alb3eav5ej58ynsqtbez7cd0',
+            github: 'https://github.com/gatson32/vigil-agent',
+        },
+    });
+});
+// ============================================================
+//  API KEY MANAGEMENT ENDPOINTS
+// ============================================================
+// Pricing page (JSON)
+app.get('/v1/api/pricing', (_req, res) => {
+    res.json({
+        tiers: Object.entries(API_TIERS).map(([id, t]) => ({
+            id,
+            label: t.label,
+            price: t.price,
+            monthlyLimit: t.monthlyLimit,
+            ratePerMin: t.ratePerMin,
+            features: id === 'free'
+                ? ['100 scores/month', '10 req/min', 'Community support']
+                : id === 'starter'
+                    ? ['1,000 scores/month', '30 req/min', 'Email support', 'Compare endpoint']
+                    : id === 'pro'
+                        ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
+                        : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'],
+        })),
+        currency: 'USD',
+        billingCycle: 'monthly',
+        contact: 'api@vigiltrust.io',
+    });
+});
+// Pricing page (HTML)
+app.get('/api/pricing', (_req, res) => {
+    const tierCards = Object.entries(API_TIERS).map(([id, t]) => {
+        const features = id === 'free'
+            ? ['100 scores/month', '10 req/min', 'Community support']
+            : id === 'starter'
+                ? ['1,000 scores/month', '30 req/min', 'Email support', 'Compare endpoint']
+                : id === 'pro'
+                    ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
+                    : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'];
+        const popular = id === 'pro' ? `<div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;padding:2px 12px;border-radius:12px;font-size:11px;font-weight:700">MOST POPULAR</div>` : '';
+        const border = id === 'pro' ? 'border:2px solid #3b82f6;' : 'border:1px solid #1f2937;';
+        return `<div style="position:relative;background:#111827;${border}border-radius:16px;padding:24px;flex:1;min-width:220px">
+      ${popular}
+      <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:4px">${id.charAt(0).toUpperCase() + id.slice(1)}</h3>
+      <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#6b7280;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
+      <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#9ca3af;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
+      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1f2937;color:#9ca3af;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigiltrust.io?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
+    </div>`;
+    }).join('');
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL API Pricing</title></head>
+<body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px">
+<div style="max-width:1000px;margin:0 auto">
+  <div style="text-align:center;margin-bottom:40px">
+    <h1 style="font-size:32px;font-weight:800;letter-spacing:2px;margin-bottom:8px">VIGIL API</h1>
+    <p style="color:#6b7280;font-size:14px">Trust scores for prediction market wallets. Programmatic access.</p>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${tierCards}</div>
+  <div style="text-align:center;margin-top:40px">
+    <p style="color:#4b5563;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
+    <p style="color:#4b5563;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigiltrust.io" style="color:#3b82f6">api@vigiltrust.io</a></p>
+  </div>
+</div></body></html>`);
+});
+// Create API key (self-serve for free tier, manual approval for paid)
+app.get('/v1/api/keys/create', (req, res) => {
+    const tier = req.query.tier || 'free';
+    const email = req.query.email;
+    if (!email) {
+        return res.status(400).json({ error: 'Email required', usage: '/v1/api/keys/create?tier=free&email=you@example.com' });
+    }
+    if (tier !== 'free' && tier !== 'starter') {
+        return res.json({
+            message: `${tier} tier requires manual setup. Contact api@vigiltrust.io`,
+            tier,
+            pricing: API_TIERS[tier],
+        });
+    }
+    const tierConfig = API_TIERS[tier];
+    if (!tierConfig) {
+        return res.status(400).json({ error: 'Invalid tier', validTiers: Object.keys(API_TIERS) });
+    }
+    // Check if email already has a key
+    for (const record of apiKeyStore.values()) {
+        if (record.owner === email.toLowerCase()) {
+            return res.json({
+                message: 'You already have an API key. Contact api@vigiltrust.io if you need a new one.',
+                tier: record.tier,
+            });
+        }
+    }
+    const key = generateApiKey();
+    const record = {
+        key,
+        tier: tier,
+        owner: email.toLowerCase(),
+        monthlyLimit: tierConfig.monthlyLimit,
+        ratePerMin: tierConfig.ratePerMin,
+        monthlyUsage: 0,
+        createdAt: new Date().toISOString(),
+        expiresAt: null,
+    };
+    apiKeyStore.set(key, record);
+    res.json({
+        apiKey: key,
+        tier: record.tier,
+        monthlyLimit: record.monthlyLimit,
+        ratePerMin: record.ratePerMin,
+        usage: {
+            header: 'x-api-key: YOUR_KEY',
+            queryParam: '?api_key=YOUR_KEY',
+            example: `curl -H "x-api-key: ${key}" https://vigil-trust-api.onrender.com/v1/polymarket/0x...`,
+        },
+        warning: 'Save this key — it cannot be retrieved later.',
+    });
+});
+// Check API key usage
+app.get('/v1/api/keys/usage', (req, res) => {
+    const apiKey = req.headers['x-api-key'] || req.query.api_key;
+    if (!apiKey) {
+        return res.status(401).json({ error: 'Provide API key via x-api-key header or api_key query param' });
+    }
+    const record = validateApiKey(apiKey);
+    if (!record) {
+        return res.status(401).json({ error: 'Invalid or expired API key' });
+    }
+    res.json({
+        tier: record.tier,
+        owner: record.owner,
+        monthlyLimit: record.monthlyLimit,
+        monthlyUsage: record.monthlyUsage,
+        remaining: record.monthlyLimit - record.monthlyUsage,
+        ratePerMin: record.ratePerMin,
+        createdAt: record.createdAt,
+    });
+});
+// ── Telegram Bot Webhook ──────────────────────────────────────────────
+const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TG_API_BASE = TG_BOT_TOKEN ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : '';
+// Derive webhook secret from bot token for verification
+const VIGIL_TG_WEBHOOK_SECRET = TG_BOT_TOKEN ? `vigil_tg_${TG_BOT_TOKEN.slice(-16)}` : '';
+async function tgSend(chatId, text) {
+    if (!TG_API_BASE)
+        return;
+    await fetch(`${TG_API_BASE}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    });
+}
+function tgGradeEmoji(grade) {
+    return { A: '🟢', B: '🔵', C: '🟡', D: '🟠', F: '🔴' }[grade] || '⚪';
+}
+function tgPnl(pnl) {
+    return pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
+}
+app.post('/telegram/webhook', async (req, res) => {
+    res.sendStatus(200); // ack immediately
+    if (!TG_BOT_TOKEN)
+        return;
+    // Verify webhook secret token to prevent unauthorized webhook calls
+    const providedSecret = String(req.headers['x-telegram-bot-api-secret-token'] || '');
+    if (!providedSecret || providedSecret !== VIGIL_TG_WEBHOOK_SECRET) {
+        console.warn('[TG Bot] Webhook called without valid secret token');
+        return;
+    }
+    const msg = req.body?.message;
+    if (!msg?.text)
+        return;
+    const chatId = msg.chat.id;
+    const text = msg.text.trim();
+    try {
+        if (text.startsWith('/start') || text.startsWith('/help')) {
+            await tgSend(chatId, `<b>VIGIL Trust Score Bot</b>\n\nScore any Polymarket wallet's forecasting skill.\n\n<b>Commands:</b>\n/score &lt;wallet or username&gt;\n/compare &lt;wallet1&gt; &lt;wallet2&gt;\n/top — Leaderboard\n\n<b>Example:</b>\n<code>/score swisstony</code>\n\nPowered by <a href="https://vigil-trust-api.onrender.com">VIGIL</a>`);
+        }
+        else if (text.startsWith('/score')) {
+            const input = text.replace(/^\/score\s*/, '').split(/\s+/)[0];
+            if (!input) {
+                await tgSend(chatId, '⚠️ Usage: <code>/score &lt;wallet or username&gt;</code>');
+                return;
+            }
+            await tgSend(chatId, `⏳ Scoring <code>${input.length > 20 ? input.slice(0, 8) + '...' + input.slice(-4) : input}</code>...`);
+            // Resolve username if needed
+            let wallet = input;
+            if (!wallet.startsWith('0x')) {
+                const resolved = resolveWalletIdentifier(wallet);
+                if (!resolved) {
+                    await tgSend(chatId, `❌ Username "${input}" not found. Try a wallet address.`);
+                    return;
+                }
+                wallet = resolved;
+            }
+            const d = await scorePolymarketTrader(wallet);
+            if (!d) {
+                await tgSend(chatId, '❌ No trading data found for this wallet.');
+                return;
+            }
+            const name = d.displayName && !d.displayName.startsWith('0x') ? d.displayName.split('-')[0] : d.wallet.slice(0, 8) + '...' + d.wallet.slice(-4);
+            const flags = (d.flags || []).slice(0, 3).map((f) => `  ⚠️ ${f}`).join('\n');
+            const greens = (d.greenFlags || []).slice(0, 2).map((f) => `  ✅ ${f}`).join('\n');
+            await tgSend(chatId, `${tgGradeEmoji(d.trustGrade)} <b>VIGIL: ${d.trustGrade} / ${d.trustScore}</b>\n<b>${hEsc(name)}</b> — ${d.trustTier}\n\n📊 Cal: ${d.calibration}/100 | Edge: ${d.liveEdge}/100\nProfit: ${d.profitability}/100 | Consist: ${d.consistency}/100\nDisc: ${d.discipline}/100 | Sample: ${d.sampleSize}/100\n\n💰 PnL: <b>${tgPnl(d.raw.totalPnl)}</b>\n📈 ${d.raw.totalTrades} trades, ${d.raw.resolvedBets} resolved${flags ? '\n\n🚩 ' + flags : ''}${greens ? '\n🟢 ' + greens : ''}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/${d.wallet}">Full Scorecard</a>`);
+        }
+        else if (text.startsWith('/compare')) {
+            const parts = text.replace(/^\/compare\s*/, '').split(/\s+/);
+            if (parts.length < 2) {
+                await tgSend(chatId, '⚠️ Usage: <code>/compare &lt;wallet1&gt; &lt;wallet2&gt;</code>');
+                return;
+            }
+            await tgSend(chatId, '⏳ Comparing...');
+            const [d1, d2] = await Promise.all([scorePolymarketTrader(parts[0]), scorePolymarketTrader(parts[1])]);
+            if (!d1 || !d2) {
+                await tgSend(chatId, '❌ One or both wallets not found.');
+                return;
+            }
+            await tgSend(chatId, `⚔️ <b>VIGIL Head-to-Head</b>\n\n${tgGradeEmoji(d1.trustGrade)} <b>${hEsc(d1.displayName?.split('-')[0] || d1.wallet.slice(0, 10))}</b>: ${d1.trustGrade}/${d1.trustScore}\n${tgGradeEmoji(d2.trustGrade)} <b>${hEsc(d2.displayName?.split('-')[0] || d2.wallet.slice(0, 10))}</b>: ${d2.trustGrade}/${d2.trustScore}\n\n💰 ${tgPnl(d1.raw.totalPnl)} vs ${tgPnl(d2.raw.totalPnl)}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/compare?w1=${d1.wallet}&w2=${d2.wallet}">Full Comparison</a>`);
+        }
+        else if (text.startsWith('/top') || text.startsWith('/leaderboard')) {
+            let lb = '🏆 <b>Polymarket Top 10 — VIGIL Scored</b>\n\n';
+            for (let i = 0; i < TOP_WALLETS.length; i++) {
+                const w = TOP_WALLETS[i];
+                lb += `${i + 1}. ${tgGradeEmoji(w.grade)} <b>${hEsc(w.name)}</b> ${w.grade}/${w.score} — ${tgPnl(w.pnl)}\n`;
+            }
+            lb += `\n🔗 <a href="https://vigil-trust-api.onrender.com">Full Leaderboard</a>`;
+            await tgSend(chatId, lb);
+        }
+    }
+    catch (e) {
+        console.error('[TG Bot] Error:', e.message);
+        await tgSend(chatId, '❌ Something went wrong. Try again.').catch(() => { });
+    }
+});
+// Setup webhook endpoint (call once to register)
+app.get('/telegram/setup', async (req, res) => {
+    if (!TG_BOT_TOKEN) {
+        res.json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+        return;
+    }
+    const webhookUrl = `https://vigil-trust-api.onrender.com/telegram/webhook`;
+    const result = await fetch(`${TG_API_BASE}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: webhookUrl, secret_token: VIGIL_TG_WEBHOOK_SECRET }),
+    }).then(r => r.json());
+    res.json({ webhookUrl, result });
+});
+// ============================================================
+//  EMAIL CAPTURE ENDPOINT
+// ============================================================
+app.post('/subscribe', (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@') || email.length < 5 || email.length > 200) {
+        return res.status(400).json({ error: 'Valid email required' });
+    }
+    if (emailSubscribers.has(email)) {
+        return res.json({ success: true, message: 'Already subscribed' });
+    }
+    emailSubscribers.add(email);
+    console.log(`[SUBSCRIBE] New subscriber: ${email} (total: ${emailSubscribers.size})`);
+    res.json({ success: true, message: 'Subscribed! We\'ll notify you on launch updates.' });
+});
+app.get('/subscribe/count', (_req, res) => {
+    res.json({ subscribers: emailSubscribers.size });
+});
+// --- 404 handler (must be last route) ---
+app.use((_req, res) => {
+    res.status(404).json({
+        error: 'Not found',
+        message: 'Unknown endpoint. See GET /v1 for documentation.',
+    });
+});
+// --- Start server ---
+async function start() {
+    // Initialize database (graceful fallback to memory if unavailable)
+    const dbConnected = await initDb();
+    app.listen(PORT, () => {
+        console.log(`
+╔══════════════════════════════════════════════════╗
+║       VIGIL Trust Score API v1.15.0              ║
+║     On-chain credit bureau for AI agents         ║
+╠══════════════════════════════════════════════════╣
+║  Server:    http://localhost:${PORT}               ║
+║  Docs:      http://localhost:${PORT}/v1            ║
+║  Health:    http://localhost:${PORT}/v1/health     ║
+║  Storage:   ${dbConnected ? 'PostgreSQL (persistent)' : 'In-Memory (volatile)'}       ║
+║  Rate Limit: ${RATE_LIMIT_MAX} req/min per IP             ║
+╚══════════════════════════════════════════════════╝
+    `);
+        // Schedule prescore cron: 30s after boot, then every hour
+        setTimeout(() => runPrescoringCron(), 30000);
+        setInterval(() => runPrescoringCron(), 3600000);
+        console.log('[BOOT] Prescore cron scheduled: 30s initial delay, then hourly');
+        // Schedule discovery crawler: 2 min after boot, then every 6 hours
+        // Scans resolved markets, discovers wallets, builds skill leaderboard
+        setTimeout(() => {
+            runDiscoveryCrawl({ maxMarkets: 50, maxToScore: 100 }).then(r => {
+                console.log(`[BOOT] Initial discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
+            }).catch(err => {
+                console.error('[BOOT] Initial discovery crawl failed:', err);
+            });
+        }, 120000); // 2 min delay — let prescore finish first
+        setInterval(() => {
+            runDiscoveryCrawl({ maxMarkets: 100, maxToScore: 200 }).then(r => {
+                console.log(`[CRON] Discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
+            }).catch(err => {
+                console.error('[CRON] Discovery crawl failed:', err);
+            });
+        }, 6 * 3600000); // every 6 hours
+        console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 6h');
+    });
+    // Start ACP evaluator listener in the background (optional, non-fatal)
+    if (process.env.WHITELISTED_WALLET_PRIVATE_KEY && process.env.SESSION_ENTITY_KEY_ID) {
+        console.log('[BOOT] Starting ACP evaluator listener...');
+        startEvaluatorListener().catch((err) => {
+            console.error('[BOOT] Evaluator listener failed to start (API will continue running):', err);
+        });
+    }
+    else {
+        console.log('[BOOT] ACP evaluator listener NOT started (missing WHITELISTED_WALLET_PRIVATE_KEY or SESSION_ENTITY_KEY_ID)');
+    }
+}
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+    console.log('[SHUTDOWN] Received SIGTERM, closing database...');
+    await closeDb();
+    process.exit(0);
+});
+process.on('SIGINT', async () => {
+    console.log('[SHUTDOWN] Received SIGINT, closing database...');
+    await closeDb();
+    process.exit(0);
+});
+// ============================================================
+//  HOMEPAGE RENDERER
+// ============================================================
+function hEsc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function gradeColor(g) {
+    return g === 'A' ? '#10b981' : g === 'B' ? '#34d399' : g === 'C' ? '#eab308' : g === 'D' ? '#f97316' : '#ef4444';
+}
+// ============================================================
+//  PRESCORE CRON — Background scoring for popular wallets
+// ============================================================
+async function runPrescoringCron() {
+    console.log(`[CRON] Starting pre-scoring run for ${TOP_WALLETS.length} popular wallets...`);
+    for (const wallet of TOP_WALLETS) {
+        try {
+            const report = await scorePolymarketTrader(wallet.wallet);
+            if (report) {
+                // Store in prescore cache with timestamp
+                prescoredCache.set(wallet.wallet.toLowerCase(), {
+                    ...report,
+                    cachedAt: Date.now(),
+                });
+                // Update TOP_WALLETS entry with fresh data
+                wallet.grade = report.trustGrade;
+                wallet.score = report.trustScore;
+                console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore}`);
+            }
+        }
+        catch (err) {
+            console.error(`[CRON] Failed to pre-score ${wallet.name} (${wallet.wallet}):`, err.message);
+        }
+        // 3-second delay between wallets to avoid hammering upstream
+        await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    console.log(`[CRON] Pre-scoring complete. Cached ${prescoredCache.size} wallets.`);
+}
+// Pre-scored top Polymarket wallets (hardcoded, refreshable via cron)
+// Polymarket Top 10 by All-Time PnL — live VIGIL v1.17.0 scores (2026-04-12)
+const TOP_WALLETS = [
+    { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D', score: 47, resolved: 11, calibration: 0 },
+    { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 32, resolved: 20, calibration: 0 },
+    { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 16, resolved: 10, calibration: 0 },
+    { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D', score: 35, resolved: 24, calibration: 0 },
+    { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 22, resolved: 0, calibration: 0 },
+    { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 41, resolved: 901, calibration: 0 },
+    { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 48, resolved: 164, calibration: 0 },
+    { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 46, resolved: 246, calibration: 0 },
+    { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D', score: 46, resolved: 794, calibration: 0 },
+    { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 32, resolved: 928, calibration: 0 },
+];
+// Seed username cache from leaderboard on startup
+for (const w of TOP_WALLETS) {
+    if (w.name && !w.name.startsWith('0x')) {
+        usernameToWallet.set(w.name.toLowerCase(), w.wallet);
+    }
+}
+function renderHomepage() {
+    // Build leaderboard rows
+    const leaderboardRows = TOP_WALLETS.map((w, i) => {
+        const gc = gradeColor(w.grade);
+        const pnlStr = w.pnl >= 0 ? `+$${w.pnl.toLocaleString()}` : `-$${Math.abs(w.pnl).toLocaleString()}`;
+        const pnlColor = w.pnl >= 0 ? '#10b981' : '#ef4444';
+        return `<tr onclick="window.location='/polymarket/${w.wallet}'" style="cursor:pointer">
+<td style="color:#6b7280">${i + 1}</td>
+<td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#4b5563;font-family:monospace">${w.wallet.slice(0, 8)}...${w.wallet.slice(-4)}</span></td>
+<td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
+<td><span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}40">${w.grade}</span></td>
+<td style="color:#fff;font-weight:600">${w.score}</td>
+<td>${w.calibration > 0 ? w.calibration : '<span style="color:#4b5563">—</span>'}</td>
+<td style="color:#9ca3af">${w.resolved}</td>
+</tr>`;
+    }).join('');
+    // Build recently scored rows
+    const recentRows = recentScores.slice(0, 8).map(s => {
+        const gc = gradeColor(s.trustGrade);
+        const pnlStr = s.totalPnl >= 0 ? `+$${Math.round(s.totalPnl).toLocaleString()}` : `-$${Math.round(Math.abs(s.totalPnl)).toLocaleString()}`;
+        const pnlColor = s.totalPnl >= 0 ? '#10b981' : '#ef4444';
+        const ago = Math.round((Date.now() - new Date(s.scoredAt).getTime()) / 60000);
+        const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`;
+        return `<tr onclick="window.location='/polymarket/${s.wallet}'" style="cursor:pointer">
+<td><span style="color:#fff;font-weight:600">${hEsc(s.displayName)}</span></td>
+<td style="color:${pnlColor};font-weight:600">${pnlStr}</td>
+<td><span style="display:inline-block;width:24px;height:24px;border-radius:50%;background:${gc}20;color:${gc};text-align:center;line-height:24px;font-weight:800;font-size:12px;border:1px solid ${gc}40">${s.trustGrade}</span></td>
+<td style="color:#fff">${s.trustScore}</td>
+<td style="color:#6b7280;font-size:12px">${agoStr}</td>
+</tr>`;
+    }).join('');
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL — Trust Scores for Polymarket Traders</title>
+<meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.7}
+a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+
+.wrap{max-width:900px;margin:0 auto;padding:32px 24px}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:48px;border-bottom:1px solid #1f2937;padding-bottom:16px}
+.logo{font-size:24px;font-weight:800;color:#fff;letter-spacing:2px}
+.logo span{color:#a78bfa}
+.nav-links{display:flex;gap:20px;font-size:14px}
+
+.hero{text-align:center;margin-bottom:56px}
+.hero h1{font-size:42px;font-weight:800;color:#fff;line-height:1.2;margin-bottom:16px}
+.hero h1 em{font-style:normal;color:#a78bfa}
+.hero p{font-size:18px;color:#9ca3af;max-width:680px;margin:0 auto 32px}
+
+.search-box{max-width:600px;margin:0 auto 16px}
+.search-box form{display:flex;gap:8px}
+.search-box input{flex:1;padding:14px 18px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:16px;outline:none}
+.search-box input:focus{border-color:#a78bfa}
+.search-box select{padding:14px 12px;border-radius:10px;border:1px solid #374151;background:#111827;color:#d1d5db;font-size:14px;cursor:pointer}
+.search-box button{padding:14px 28px;border-radius:10px;border:none;background:#7c3aed;color:#fff;font-weight:700;font-size:15px;cursor:pointer}
+.search-box button:hover{background:#6d28d9}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-bottom:56px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:28px;transition:border-color .2s}
+.card:hover{border-color:#374151}
+.card h3{font-size:18px;font-weight:700;color:#fff;margin-bottom:8px}
+.card p{font-size:14px;color:#9ca3af;margin-bottom:16px}
+.card .tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;margin-right:6px}
+.tag.live{background:#10b98120;color:#10b981;border:1px solid #10b98140}
+.tag.chain{background:#3b82f620;color:#3b82f6;border:1px solid #3b82f640}
+
+.moat{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:32px;margin-bottom:56px}
+.moat h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
+.moat p{font-size:15px;color:#9ca3af;margin-bottom:12px}
+
+.dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:56px}
+.dim{text-align:center;padding:20px;background:#111827;border:1px solid #1f2937;border-radius:10px}
+.dim .pct{font-size:28px;font-weight:800;color:#a78bfa}
+.dim .label{font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+
+.api-sec{margin-bottom:56px}
+.api-sec h2{font-size:22px;font-weight:700;color:#fff;margin-bottom:16px}
+.endpoint{background:#0d1117;border:1px solid #1f2937;border-radius:8px;padding:14px 18px;margin-bottom:8px;font-family:'SF Mono',Consolas,monospace;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.endpoint .method{color:#10b981;font-weight:700;margin-right:12px}
+.endpoint .path{color:#d1d5db}
+.endpoint .desc{color:#6b7280;font-size:12px}
+
+.foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:12px;color:#4b5563}
+table tr:hover td{background:#1f293744}
+table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:background .15s}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #ffffff40;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+@media(max-width:640px){
+  .wrap{padding:12px}
+  table{font-size:12px}
+  table th,table td{padding:6px 4px}
+  .hero-title{font-size:28px!important}
+  .hero-sub{font-size:14px!important}
+  .cards{flex-direction:column}
+  .card{min-width:auto!important}
+  form{flex-direction:column}
+  form select,form input,form button{width:100%;border-radius:8px!important}
+  .sec-title{font-size:11px}
+  .endpoint{flex-direction:column;gap:4px}
+}
+</style>
+<script>
+function doSearch(e) {
+  e.preventDefault();
+  var q = document.getElementById('q').value.trim();
+  if (!q) return;
+  var btn = e.target.querySelector('button');
+  btn.innerHTML = '<span class="spinner"></span> Scoring...';
+  btn.disabled = true;
+  if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
+  else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
+}
+function doCompare(e) {
+  e.preventDefault();
+  var w1 = document.getElementById('cmp1').value.trim();
+  var w2 = document.getElementById('cmp2').value.trim();
+  if (!w1 || !w2) return;
+  window.location.href = '/polymarket/compare?wallets=' + encodeURIComponent(w1) + ',' + encodeURIComponent(w2);
+}
+function doSubscribe(e) {
+  e.preventDefault();
+  var email = document.getElementById('subemail').value.trim();
+  if (!email) return;
+  var btn = document.getElementById('subbtn');
+  btn.textContent = '...';
+  btn.disabled = true;
+  fetch('/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      document.getElementById('submsg').style.display='block';
+      document.getElementById('submsg').textContent=d.message||'Subscribed!';
+      btn.textContent='Done';
+    })
+    .catch(function(){
+      document.getElementById('submsg').style.display='block';
+      document.getElementById('submsg').style.color='#ef4444';
+      document.getElementById('submsg').textContent='Something went wrong. Try again.';
+      btn.textContent='Subscribe';
+      btn.disabled=false;
+    });
+}
+</script>
+</head><body>
+<div class="wrap">
+
+<div class="nav">
+  <div class="logo"><span>V</span>IGIL</div>
+  <div class="nav-links">
+    <a href="/polymarket">Polymarket</a>
+    <a href="/polymarket/compare">Compare</a>
+    <a href="/polymarket/leaderboard">Skill Leaderboard</a>
+    <a href="/api/pricing">API Pricing</a>
+    <a href="/v1">Docs</a>
+  </div>
+</div>
+
+<div class="hero">
+  <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
+  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D on VIGIL.</p>
+</div>
+
+<div class="search-box">
+  <form onsubmit="doSearch(event)">
+    <input type="text" id="q" placeholder="Wallet address (0x...) or username" autocomplete="off" />
+    <button type="submit">Score</button>
+  </form>
+</div>
+
+<div class="email-box" style="max-width:500px;margin:0 auto 40px;text-align:center">
+  <p style="font-size:13px;color:#6b7280;margin-bottom:10px">Get notified when we launch new features</p>
+  <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
+    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:14px;outline:none" />
+    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Subscribe</button>
+  </form>
+  <div id="submsg" style="font-size:13px;margin-top:8px;color:#10b981;display:none"></div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <h3>Score Any Wallet</h3>
+    <p>Paste a wallet address or username. Get a 6-dimension trust score in seconds. Calibration, live edge, profitability, consistency, discipline, sample size.</p>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Polygon</span>
+  </div>
+  <div class="card">
+    <h3>Compare Head-to-Head</h3>
+    <p>Put two wallets side by side. See who's actually better across every dimension.</p>
+    <form onsubmit="doCompare(event)" style="display:flex;gap:6px;margin-top:8px">
+      <input type="text" id="cmp1" placeholder="Wallet 1" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
+      <input type="text" id="cmp2" placeholder="Wallet 2" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
+      <button type="submit" style="padding:8px 14px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:700;font-size:12px;cursor:pointer">Go</button>
+    </form>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Polygon</span>
+  </div>
+  <div class="card">
+    <h3>Chrome Extension</h3>
+    <p>See trust score badges directly on Polymarket profile pages. Coming soon to the Chrome Web Store.</p>
+    <span class="tag live">COMING SOON</span>
+    <span class="tag chain">Browser</span>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:56px">
+
+<div class="card" style="overflow-x:auto">
+  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Polymarket Top 10 by PnL — VIGIL Scored</div>
+  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="border-bottom:1px solid #1f2937">
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Cal.</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Resolved</th>
+  </tr>
+  ${leaderboardRows}
+  </table>
+</div>
+
+${recentRows.length > 0 ? `<div class="card">
+  <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Recently Scored</div>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="border-bottom:1px solid #1f2937">
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Trader</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">PnL</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Grade</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">Score</th>
+    <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">When</th>
+  </tr>
+  ${recentRows}
+  </table>
+</div>` : ''}
+
+</div>
+
+<div class="moat">
+  <h2>What Makes VIGIL Different</h2>
+  <p>14 of the top 20 most profitable wallets on prediction market leaderboards are bots running structural arbitrage. Raw PnL doesn't tell you if someone can actually predict the future — it tells you if they're fast.</p>
+  <p>VIGIL is the first system that answers the real question: <strong style="color:#fff">when a trader buys at $0.70, implying 70% confidence, does the event actually happen 70% of the time?</strong> That's calibration — and nobody else computes it.</p>
+  <p>Every score is backed by on-chain verification from Base and Polygon. Wallet age, transaction count, USDC flow cross-checks, protocol fingerprinting. We don't trust what APIs report — we verify it against the blockchain.</p>
+</div>
+
+<div class="dims">
+  <div class="dim"><div class="pct">25%</div><div class="label">Calibration</div></div>
+  <div class="dim"><div class="pct">25%</div><div class="label">Live Edge</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Profitability</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Consistency</div></div>
+  <div class="dim"><div class="pct">10%</div><div class="label">Discipline</div></div>
+  <div class="dim"><div class="pct">10%</div><div class="label">Sample Size</div></div>
+</div>
+
+<div class="card" style="margin-bottom:32px">
+  <h2 style="font-size:20px;color:#fff;margin-bottom:16px">What Do The Grades Mean?</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #064e3b"><div style="font-size:28px;font-weight:800;color:#10b981">A</div><div style="font-size:11px;color:#6b7280">80-100</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Elite forecaster. Beats naive baselines by a wide margin. Rare.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #1e3a5f"><div style="font-size:28px;font-weight:800;color:#3b82f6">B</div><div style="font-size:11px;color:#6b7280">65-79</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Skilled. Consistent edge across multiple markets with real data.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #713f12"><div style="font-size:28px;font-weight:800;color:#eab308">C</div><div style="font-size:11px;color:#6b7280">50-64</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Average. Some skill signal, but not enough to distinguish from luck.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7c2d12"><div style="font-size:28px;font-weight:800;color:#f97316">D</div><div style="font-size:11px;color:#6b7280">35-49</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Below average. Data shows poor calibration or thin evidence.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7f1d1d"><div style="font-size:28px;font-weight:800;color:#ef4444">F</div><div style="font-size:11px;color:#6b7280">0-34</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">No demonstrated skill. Performs at or below random chance.</div></div>
+  </div>
+  <div style="font-size:13px;color:#6b7280;line-height:1.7">
+    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Confidence intervals</strong> tell you how reliable the grade is. A score of D/47 ± 3 (high confidence) means we're confident the true score is between 44 and 50 — there's enough data (200+ resolved bets) to be sure. A score of D/47 ± 25 (very low confidence) means the true score could be anywhere from 22 to 72 — take it with a grain of salt.</p>
+    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Brier Skill Score (BSS)</strong> compares a trader against a strategy that just predicts the historical average every time. Positive BSS = better than guessing. Negative BSS = worse than guessing. A BSS of -149% means they perform 2.5x worse than if they'd just said "50/50" on everything.</p>
+    <p><strong style="color:#9ca3af">How we score:</strong> Same methodology that IARPA used to identify superforecasters — Brier Score Decomposition (Murphy 1973), Log Loss for rare-event sensitivity, and on-chain USDC verification against Polygon. We measure whether traders can actually predict the future, not whether they're fast or lucky.</p>
+  </div>
+</div>
+
+<div class="api-sec">
+  <h2>API Endpoints</h2>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/compare</span></div><span class="desc">Compare two wallets head-to-head</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/leaderboard</span></div><span class="desc">Skill leaderboard — top wallets by forecasting ability</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/leaderboard/skill</span></div><span class="desc">JSON: Skill-ranked leaderboard</span></div>
+  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/polymarket/discover/crawl</span></div><span class="desc">Trigger wallet discovery crawl</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet</span></div><span class="desc">On-chain wallet provenance (Base + Polygon)</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/api/pricing</span></div><span class="desc">API pricing and rate limits</span></div>
+  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/api/keys/create</span></div><span class="desc">Create API key for programmatic access</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/health</span></div><span class="desc">Service health + system status</span></div>
+</div>
+
+<div class="foot">
+  <strong>Not financial advice.</strong> VIGIL Trust Score is informational only. Scores may change as new data becomes available.<br/>
+  Past performance does not guarantee future results. Always do your own research.<br/>
+  Built by Freedom United Works &middot; v1.17.0 &middot; <a href="/privacy">Privacy Policy</a>
+</div>
+
+</div>
+</body></html>`;
+}
+start().catch(err => {
+    console.error('[FATAL] Failed to start server:', err);
+    process.exit(1);
+});
+export default app;

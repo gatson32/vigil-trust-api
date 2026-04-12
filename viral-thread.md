@@ -1,4 +1,4 @@
-# VIGIL Viral Thread v4 — Verified v1.17.0 Data (April 12, 2026)
+# VIGIL Viral Thread v5 — Verified v1.18.0 Data (April 12, 2026)
 
 ## Full Thread (12 tweets)
 
@@ -68,20 +68,37 @@ That means every single top wallet performs WORSE than a strategy that just pred
 PnL leaderboards don't measure skill. They measure timing, leverage, and luck.
 
 **9/**
-How VIGIL scores (v1.17.0):
+So we built a crawler. Scanned 500+ resolved Polymarket markets. Discovered 600+ unique wallets. Scored hundreds.
+
+Grade distribution: 1 B. A handful of C's. Mostly D's and F's.
+
+The BEST wallet we found across all of Polymarket? B/68 — one trader out of hundreds.
+
+A-grade forecasters essentially don't exist on Polymarket yet. That's the opportunity.
+
+**10/**
+NEW: Skill Leaderboard — wallets ranked by forecasting ability, not PnL.
+
+https://vigil-trust-api.onrender.com/polymarket/leaderboard
+
+Updated every 6 hours. The crawler keeps scanning. When an A-grade appears, we'll know first.
+
+**11/**
+How VIGIL scores (v1.18.0):
 
 Brier Score Decomposition — Reliability + Resolution + Uncertainty (Murphy 1973)
 Log Loss — catches overconfidence on rare events
 Timeliness — how early you enter before resolution
-On-chain verification — USDC flow cross-checks on Polygon
+On-chain verification — USDC flow cross-checks on Base
 Confidence intervals on every score
+Wallet discovery crawler — scans 500+ resolved markets every 6h
 
-**10/**
+**12/**
 This isn't a new idea. It's how IARPA identified superforecasters. It's how Good Judgment Project evaluates the world's best predictors.
 
 We just brought it to prediction markets — where the stakes are real money and nobody was checking.
 
-**11/**
+**13/**
 Score any Polymarket wallet — free, no signup:
 
 https://vigil-trust-api.onrender.com
@@ -92,7 +109,7 @@ API for builders: https://vigil-trust-api.onrender.com/pricing
 
 @Polymarket @VitalikButerin @rektcapital @CoinDesk @Cointelegraph
 
-**12/**
+**14/**
 Prediction markets are a $50B+ industry.
 
 Right now there's no trust layer. Copy-traders are following wallets that are down $40M behind a leaderboard showing gains.
@@ -117,7 +134,7 @@ Score any wallet free: https://vigil-trust-api.onrender.com
 
 ---
 
-## Verified Data (v1.17.0 — April 12, 2026):
+## Verified Data (v1.18.0 — April 12, 2026):
 
 | # | Name | LB PnL | VIGIL PnL | Grade | Score | Resolved | BSS | Brier | Win Rate |
 |---|------|--------|-----------|-------|-------|----------|-----|-------|----------|
@@ -138,9 +155,11 @@ BSS = Brier Skill Score (positive = better than naive, negative = worse)
 ## Posting Notes:
 
 - Best time: Tuesday-Thursday, 9-11 AM EST
-- "0 A's, 0 B's, 0 C's" is the hook — still holds at v1.17.0
+- "0 A's, 0 B's, 0 C's" is the hook for top-10 whales — still holds at v1.18.0
+- NEW hook: "We scanned 600+ wallets. Only 1 scored above C." — the crawler angle
 - Countryside -$40.4M with -9339% BSS is the nuclear stat
 - swisstony's "70% confidence → 7.5% actual" is the most relatable example
 - The IARPA/superforecaster angle gives academic credibility
 - 9 of 10 BSS negative = all but one worse than guessing (HorizonSplendidView at +13% BSS is the lone exception but still F/32)
-- v1.17.0 penalty rebalance makes scores more defensible — we reduced unfair stacking while keeping genuinely bad wallets low
+- v1.18.0 adds skill leaderboard — link directly to /polymarket/leaderboard as CTA
+- The "A-grades don't exist yet" angle creates FOMO — people will want alerts when one appears

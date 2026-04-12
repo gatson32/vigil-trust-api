@@ -35,10 +35,6 @@ import {
 import {
   scorePolymarketTrader,
   type PolymarketRiskReport,
-  runDiscoveryCrawl,
-  getSkillLeaderboard,
-  getCrawlerStatus,
-  type LeaderboardEntry,
 } from './lib/polymarket.js';
 import {
   getWalletProvenance,
@@ -150,11 +146,6 @@ setInterval(() => {
     if (now > entry.resetAt) rateLimitStore.delete(ip);
   }
 }, 300_000);
-
-// ============================================================
-//  EMAIL CAPTURE — Newsletter / launch updates
-// ============================================================
-const emailSubscribers: Set<string> = new Set();
 
 // ============================================================
 //  API KEY SYSTEM — Paid tiers bypass rate limits
@@ -409,50 +400,6 @@ function formatAgentResponse(agent: ScoredAgent) {
 //  ROUTES
 // ============================================================
 
-// --- Privacy Policy ---
-app.get('/privacy', (_req, res) => {
-  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL — Privacy Policy</title></head>
-<body style="background:#0a0e1a;color:#d1d5db;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:40px 20px;line-height:1.8">
-<div style="max-width:700px;margin:0 auto">
-<h1 style="color:#fff;font-size:28px;margin-bottom:8px">VIGIL Privacy Policy</h1>
-<p style="color:#6b7280;font-size:13px">Last updated: April 12, 2026</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">What We Collect</h2>
-<p>VIGIL collects minimal data necessary to operate the service. We do not require user accounts or logins for basic scoring. Specifically:</p>
-<ul style="margin:8px 0;padding-left:20px">
-<li><strong>Email addresses</strong> — only if you voluntarily subscribe to our newsletter or create an API key.</li>
-<li><strong>API request logs</strong> — IP address, timestamp, and endpoint, retained for up to 30 days for rate limiting and abuse prevention.</li>
-<li><strong>Telegram chat IDs</strong> — only if you interact with our Telegram bot, used solely to deliver responses.</li>
-</ul>
-<p>We do not use cookies, analytics trackers, or browser fingerprinting. We do not link wallet addresses to personal identities.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">Chrome Extension</h2>
-<p>The VIGIL Chrome extension reads only the wallet address from Polymarket page URLs to fetch trust score data from the VIGIL API. It does not access browsing history, form data, credentials, or any other personal information. No data is sent to any third party.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">API Usage</h2>
-<p>When you use the VIGIL API or website, we process the wallet address you submit to generate a trust score. Wallet addresses are public blockchain data. We do not link wallet addresses to personal identities. API request logs (IP address, timestamp, endpoint) are retained for up to 30 days for rate limiting and abuse prevention, then deleted.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">API Keys</h2>
-<p>If you create an API key, we store the email address you provide and your usage count. This data is used solely for account management and billing. We do not share it with third parties.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">Cookies &amp; Tracking</h2>
-<p>VIGIL does not use cookies, analytics trackers, or any form of browser fingerprinting. No Google Analytics, no Facebook Pixel, no tracking scripts of any kind.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">Data Sharing</h2>
-<p>We do not sell, rent, or share any data with third parties. Trust scores are computed on our servers and returned directly to you.</p>
-
-<h2 style="color:#fff;font-size:18px;margin-top:32px">Contact</h2>
-<p>Questions about this policy: <a href="mailto:gatson32@gmail.com" style="color:#a78bfa">gatson32@gmail.com</a></p>
-
-<div style="margin-top:40px;padding-top:20px;border-top:1px solid #1f2937;font-size:12px;color:#4b5563">VIGIL — Built by Freedom United Works</div>
-</div></body></html>`);
-});
-
-// --- Google Site Verification ---
-app.get('/google3752379bc7fac689.html', (_req, res) => {
-  res.type('html').send('google-site-verification: google3752379bc7fac689.html');
-});
-
 // --- Homepage ---
 app.get('/', (_req, res) => {
   res.type('html').send(renderHomepage());
@@ -463,7 +410,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.17.0',
+    version: '1.12.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -1818,10 +1765,7 @@ app.get('/degenclaw', async (_req, res) => {
 // ============================================================
 
 // JSON API: score a Polymarket trader by wallet
-// IMPORTANT: Guard against reserved sub-route names that would be caught by :wallet
-app.get('/v1/polymarket/:wallet', async (req, res, next) => {
-  const reserved = ['compare', 'search', 'recent', 'discover', 'leaderboard'];
-  if (reserved.includes(req.params.wallet)) return next();
+app.get('/v1/polymarket/:wallet', async (req, res) => {
   try {
     const wallet = String(req.params.wallet || '').trim();
     if (!wallet || !wallet.startsWith('0x')) {
@@ -1891,8 +1835,7 @@ app.get('/v1/polymarket/search', (req, res) => {
 });
 
 // HTML score card for a Polymarket trader
-app.get('/polymarket/:wallet', async (req, res, next) => {
-  if (['compare', 'search', 'leaderboard'].includes(req.params.wallet)) return next();
+app.get('/polymarket/:wallet', async (req, res) => {
   let wallet = String(req.params.wallet || '').trim();
 
   // If not a wallet address, try username resolution
@@ -1939,98 +1882,81 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
     const pnlStr = pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
     const pnlColor = pnl >= 0 ? '#10b981' : '#ef4444';
     const name = report.displayName.length > 20 ? report.displayName.slice(0, 18) + '...' : report.displayName;
-    const confDesc = report.confidence?.description || `${report.trustGrade}/${report.trustScore}`;
-
     const dims = [
-      { label: 'Calibration', val: report.calibration, weight: '25%' },
-      { label: 'Live Edge', val: (report as any).liveEdge ?? 50, weight: '25%' },
-      { label: 'Profitability', val: report.profitability, weight: '15%' },
-      { label: 'Consistency', val: report.consistency, weight: '15%' },
-      { label: 'Discipline', val: report.discipline, weight: '10%' },
-      { label: 'Sample Size', val: report.sampleSize, weight: '10%' },
+      { label: 'Calibration', val: report.calibration },
+      { label: 'Live Edge', val: (report as any).liveEdge ?? 50 },
+      { label: 'Profitability', val: report.profitability },
+      { label: 'Consistency', val: report.consistency },
+      { label: 'Discipline', val: report.discipline },
+      { label: 'Sample Size', val: report.sampleSize },
     ];
 
     const dimBars = dims.map((d, i) => {
-      const y = 200 + i * 34;
-      const barWidth = Math.max(2, (d.val / 100) * 240);
-      const barColor = d.val >= 65 ? '#10b981' : d.val >= 35 ? '#eab308' : '#ef4444';
+      const y = 220 + i * 38;
+      const barWidth = Math.max(2, (d.val / 100) * 280);
       return `
-        <text x="40" y="${y + 13}" fill="#9ca3af" font-size="12" font-family="system-ui,sans-serif">${d.label}</text>
-        <text x="155" y="${y + 13}" fill="#4b5563" font-size="9" font-family="system-ui,sans-serif">${d.weight}</text>
-        <rect x="185" y="${y + 1}" width="240" height="12" rx="6" fill="#1f2937"/>
-        <rect x="185" y="${y + 1}" width="${barWidth}" height="12" rx="6" fill="${barColor}"/>
-        <text x="432" y="${y + 13}" fill="#fff" font-size="12" font-weight="700" font-family="system-ui,sans-serif">${d.val}</text>
+        <text x="40" y="${y + 14}" fill="#6b7280" font-size="13" font-family="system-ui,sans-serif">${d.label}</text>
+        <rect x="170" y="${y + 2}" width="280" height="14" rx="7" fill="#1f2937"/>
+        <rect x="170" y="${y + 2}" width="${barWidth}" height="14" rx="7" fill="${gc}"/>
+        <text x="460" y="${y + 14}" fill="#fff" font-size="13" font-weight="600" font-family="system-ui,sans-serif">${d.val}</text>
       `;
     }).join('');
 
-    // Skill vs Luck bar
-    const skill = report.calibrationReport?.skillDecomposition?.skill ?? 0;
-    const luck = report.calibrationReport?.skillDecomposition?.luck ?? 0;
-    const hasSkillData = skill > 0 || luck > 0;
-    const skillBarWidth = hasSkillData ? Math.max(10, (skill / (skill + luck)) * 200) : 0;
-    const luckBarWidth = hasSkillData ? 200 - skillBarWidth : 0;
-    const skillLuckSvg = hasSkillData ? `
-      <text x="40" y="420" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Skill vs Luck</text>
-      <rect x="185" y="410" width="${skillBarWidth}" height="14" rx="${luckBarWidth > 0 ? '7 0 0 7' : '7'}" fill="#10b981"/>
-      <rect x="${185 + skillBarWidth}" y="410" width="${luckBarWidth}" height="14" rx="${skillBarWidth > 0 ? '0 7 7 0' : '7'}" fill="#6366f1"/>
-      <text x="395" y="422" fill="#9ca3af" font-size="10" font-family="system-ui,sans-serif">${skill.toFixed(0)}% / ${luck.toFixed(0)}%</text>
-    ` : '';
+    // Top flags (max 2)
+    const topFlags = report.flags.slice(0, 2).map((f, i) => {
+      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
+      return `<text x="40" y="${475 + i * 22}" fill="#ef4444" font-size="11" font-family="system-ui,sans-serif">\u26A0 ${hEsc(short)}</text>`;
+    }).join('');
+    const topGreens = report.greenFlags.slice(0, 1).map((f, i) => {
+      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
+      return `<text x="40" y="${475 + report.flags.slice(0, 2).length * 22 + i * 22}" fill="#10b981" font-size="11" font-family="system-ui,sans-serif">\u2713 ${hEsc(short)}</text>`;
+    }).join('');
 
     const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 600 315">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0a0a0a"/>
-      <stop offset="100%" stop-color="#0d1117"/>
-    </linearGradient>
-  </defs>
-  <rect width="600" height="315" fill="url(#bg)"/>
-  <rect x="0" y="0" width="600" height="3" fill="${gc}"/>
-  <rect x="0" y="312" width="600" height="3" fill="${gc}" opacity="0.3"/>
+  <rect width="600" height="315" fill="#0a0a0a"/>
+  <rect x="0" y="0" width="600" height="4" fill="${gc}"/>
 
   <!-- Logo -->
-  <text x="40" y="35" fill="#a78bfa" font-size="16" font-weight="800" letter-spacing="4" font-family="system-ui,sans-serif">VIGIL</text>
-  <text x="115" y="35" fill="#4b5563" font-size="11" font-family="system-ui,sans-serif">Trust Score</text>
+  <text x="40" y="42" fill="#fff" font-size="18" font-weight="800" letter-spacing="3" font-family="system-ui,sans-serif">VIGIL</text>
+  <text x="120" y="42" fill="#6b7280" font-size="12" font-family="system-ui,sans-serif">Trust Score</text>
 
   <!-- Grade circle -->
-  <circle cx="520" cy="75" r="48" fill="${gc}12" stroke="${gc}" stroke-width="2.5"/>
-  <text x="520" y="88" fill="${gc}" font-size="44" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
-  <text x="520" y="136" fill="#fff" font-size="22" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
-  <text x="520" y="152" fill="#6b7280" font-size="10" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustTier}</text>
+  <circle cx="520" cy="90" r="50" fill="${gc}18" stroke="${gc}" stroke-width="2"/>
+  <text x="520" y="102" fill="${gc}" font-size="48" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
+  <text x="520" y="155" fill="#fff" font-size="20" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
+  <text x="520" y="172" fill="#6b7280" font-size="11" text-anchor="middle" text-transform="uppercase" font-family="system-ui,sans-serif">${report.trustTier}</text>
 
   <!-- Trader info -->
-  <text x="40" y="68" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
-  <text x="40" y="85" fill="#6b7280" font-size="10" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
-  <text x="40" y="105" fill="#4b5563" font-size="10" font-family="system-ui,sans-serif">${hEsc(confDesc)}</text>
+  <text x="40" y="85" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
+  <text x="40" y="108" fill="#6b7280" font-size="11" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
 
   <!-- Key metrics row -->
-  <text x="40" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
-  <text x="40" y="153" fill="${pnlColor}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
+  <text x="40" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
+  <text x="40" y="165" fill="${pnlColor}" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
 
-  <text x="155" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
-  <text x="155" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
+  <text x="170" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
+  <text x="170" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
 
-  <text x="255" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
-  <text x="255" y="153" fill="#fff" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
+  <text x="280" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
+  <text x="280" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
 
-  <text x="340" y="135" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Brier</text>
-  <text x="340" y="153" fill="${report.calibrationReport.brierScore < 0.2 ? '#10b981' : report.calibrationReport.brierScore < 0.3 ? '#eab308' : '#ef4444'}" font-size="17" font-weight="700" font-family="system-ui,sans-serif">${report.calibrationReport.brierScore.toFixed(3)}</text>
+  <text x="370" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Markets</text>
+  <text x="370" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.uniqueMarkets}</text>
 
   <!-- Divider -->
-  <line x1="40" y1="170" x2="460" y2="170" stroke="#1f2937" stroke-width="1"/>
+  <line x1="40" y1="190" x2="560" y2="190" stroke="#1f2937" stroke-width="1"/>
 
-  <!-- Dimension bars header -->
-  <text x="40" y="190" fill="#6b7280" font-size="9" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
+  <!-- Dimension bars -->
+  <text x="40" y="210" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
   ${dimBars}
 
-  <!-- Skill vs Luck -->
-  ${skillLuckSvg}
+  <!-- Flags -->
+  ${topFlags}
+  ${topGreens}
 
   <!-- Footer -->
-  <rect x="0" y="290" width="600" height="25" fill="#06080e"/>
-  <text x="40" y="306" fill="#374151" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
-  <text x="300" y="306" fill="#374151" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
-  <text x="560" y="306" fill="#374151" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
+  <text x="40" y="305" fill="#374151" font-size="10" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com \u2022 Informational only</text>
 </svg>`;
 
     res.set('Content-Type', 'image/svg+xml');
@@ -2128,155 +2054,6 @@ app.get('/polymarket/compare', async (req, res) => {
   } catch (err) {
     res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
   }
-});
-
-// ============================================================
-//  WALLET DISCOVERY & SKILL LEADERBOARD (v1.18.0)
-//  Crawl resolved markets, discover skilled wallets, surface A/B grades
-// ============================================================
-
-// JSON: Skill-based leaderboard — top wallets ranked by actual forecasting ability
-app.get('/v1/polymarket/leaderboard/skill', (_req, res) => {
-  const leaderboard = getSkillLeaderboard();
-  const status = getCrawlerStatus();
-
-  if (leaderboard.length === 0) {
-    return res.json({
-      status: 'empty',
-      message: status.lastCrawl
-        ? 'Leaderboard was built but no qualified wallets found yet. Try again later.'
-        : 'Leaderboard not yet built. Trigger a crawl via POST /v1/polymarket/discover/crawl or wait for the next scheduled run.',
-      crawlerStatus: status,
-      entries: [],
-    });
-  }
-
-  // Grade distribution
-  const grades: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
-  for (const e of leaderboard) grades[e.trustGrade] = (grades[e.trustGrade] || 0) + 1;
-
-  res.json({
-    status: 'ok',
-    total: leaderboard.length,
-    gradeDistribution: grades,
-    lastCrawl: status.lastCrawl,
-    entries: leaderboard,
-  });
-});
-
-// JSON: Crawler status
-app.get('/v1/polymarket/discover/status', (_req, res) => {
-  res.json(getCrawlerStatus());
-});
-
-// Trigger a discovery crawl (POST to avoid accidental triggers)
-app.post('/v1/polymarket/discover/crawl', async (req, res) => {
-  const status = getCrawlerStatus();
-  if (status.crawlInProgress) {
-    return res.json({ status: 'already_running', ...status });
-  }
-
-  // Parse optional params
-  const maxMarkets = Math.min(Number(req.query.maxMarkets) || 100, 500);
-  const minVolume = Number(req.query.minVolume) || 50000;
-  const maxToScore = Math.min(Number(req.query.maxToScore) || 200, 500);
-
-  // Start crawl in background — return immediately
-  res.json({
-    status: 'started',
-    message: `Crawling up to ${maxMarkets} resolved markets, will score up to ${maxToScore} wallets. Check /v1/polymarket/discover/status for progress.`,
-    params: { maxMarkets, minVolume, maxToScore },
-  });
-
-  // Fire and forget — the crawl updates the in-memory leaderboard
-  runDiscoveryCrawl({ maxMarkets, minVolume, maxToScore }).then(result => {
-    console.log(`[VIGIL] Discovery crawl finished:`, result);
-  }).catch(err => {
-    console.error(`[VIGIL] Discovery crawl failed:`, err);
-  });
-});
-
-// HTML: Skill Leaderboard page
-app.get('/polymarket/leaderboard', (_req, res) => {
-  const leaderboard = getSkillLeaderboard();
-  const status = getCrawlerStatus();
-
-  const gradeColor = (g: string) => {
-    switch (g) {
-      case 'A': return '#10b981';
-      case 'B': return '#3b82f6';
-      case 'C': return '#f59e0b';
-      case 'D': return '#ef4444';
-      default: return '#6b7280';
-    }
-  };
-
-  let rows = '';
-  if (leaderboard.length === 0) {
-    rows = `<tr><td colspan="7" style="text-align:center;padding:40px;color:#6b7280">No data yet. The discovery crawler runs periodically — check back soon.</td></tr>`;
-  } else {
-    rows = leaderboard.slice(0, 100).map((e, i) => {
-      const gc = gradeColor(e.trustGrade);
-      const pnl = e.realizedPnl >= 0
-        ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
-        : `<span style="color:#ef4444">-$${Math.round(Math.abs(e.realizedPnl)).toLocaleString()}</span>`;
-      const bss = e.brierSkillScore >= 0
-        ? `<span style="color:#10b981">+${(e.brierSkillScore * 100).toFixed(0)}%</span>`
-        : `<span style="color:#ef4444">${(e.brierSkillScore * 100).toFixed(0)}%</span>`;
-      const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
-      return `<tr style="border-bottom:1px solid #1f2937">
-        <td style="padding:10px 8px;color:#6b7280">${i + 1}</td>
-        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none">${pmEscape(name)}</a></td>
-        <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700">${e.trustGrade}/${e.trustScore}</span></td>
-        <td style="padding:10px 8px;text-align:center">${bss}</td>
-        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${(e.calibrationError * 100).toFixed(1)}%</td>
-        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${e.resolvedBets}</td>
-        <td style="padding:10px 8px;text-align:right">${pnl}</td>
-      </tr>`;
-    }).join('');
-  }
-
-  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title></head>
-  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
-    <div style="max-width:900px;margin:0 auto">
-      <div style="text-align:center;margin-bottom:24px">
-        <a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a>
-        <span style="color:#6b7280;font-size:13px;margin-left:12px">Skill Leaderboard</span>
-      </div>
-      <p style="text-align:center;color:#9ca3af;font-size:14px;margin-bottom:20px">
-        Wallets ranked by actual forecasting skill — calibration, Brier Skill Score, and resolution — not PnL.
-        ${status.lastCrawl ? `<br><span style="color:#374151;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
-      </p>
-
-      <div style="max-width:480px;margin:0 auto 28px auto;text-align:center">
-        <form onsubmit="var w=document.getElementById('lb-wallet').value.trim();if(!w)return false;window.location.href='/polymarket/'+encodeURIComponent(w);return false" style="display:flex;gap:8px">
-          <input id="lb-wallet" type="text" placeholder="Score any wallet — paste 0x address or username" style="flex:1;background:#111827;border:1px solid #374151;border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;outline:none" />
-          <button type="submit" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Score</button>
-        </form>
-        <div style="margin-top:8px;font-size:11px;color:#374151">Not on the leaderboard? Check any Polymarket wallet instantly.</div>
-      </div>
-
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
-        <thead>
-          <tr style="border-bottom:2px solid #1f2937;color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:1px">
-            <th style="padding:8px;text-align:left">#</th>
-            <th style="padding:8px;text-align:left">Trader</th>
-            <th style="padding:8px;text-align:center">Grade</th>
-            <th style="padding:8px;text-align:center">BSS</th>
-            <th style="padding:8px;text-align:center">Cal Error</th>
-            <th style="padding:8px;text-align:center">Resolved</th>
-            <th style="padding:8px;text-align:right">PnL</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div style="text-align:center;margin-top:24px;color:#374151;font-size:11px">
-        VIGIL Trust Score is informational only — not investment advice.<br>
-        <a href="/methodology" style="color:#4b5563;text-decoration:none">Methodology</a> ·
-        <a href="/v1/polymarket/leaderboard/skill" style="color:#4b5563;text-decoration:none">JSON API</a>
-      </div>
-    </div>
-  </body></html>`);
 });
 
 // ============================================================
@@ -2443,45 +2220,12 @@ ${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div cl
 <div class="metric"><div class="metric-label">Markets</div><div class="metric-val">${r.raw.uniqueMarkets}</div></div>
 <div class="metric"><div class="metric-label">Brier Score</div><div class="metric-val">${r.calibrationReport.brierScore}</div></div>
 <div class="metric"><div class="metric-label">Open Positions</div><div class="metric-val">${r.raw.openPositions}</div></div>
-<div class="metric"><div class="metric-label">Brier Skill</div><div class="metric-val" style="color:${r.calibrationReport.brierSkillScore > 0 ? '#10b981' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div></div>
-<div class="metric"><div class="metric-label">Log Loss</div><div class="metric-val">${r.calibrationReport.logLoss.toFixed(3)}</div></div>
 </div></div>
 
 ${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-title">Calibration Analysis</div>
 <p style="font-size:13px;color:#9ca3af;margin-bottom:8px">When this trader buys at $0.70, they imply 70% probability. Perfect calibration = the event happens 70% of the time.</p>
 <table class="cal-table"><tr><th>Bucket</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Error</th></tr>${calBucketsHtml}</table>
 <div style="margin-top:12px"><span style="font-size:12px;color:#6b7280">Calibration Error: </span><span style="font-size:14px;font-weight:600;color:${r.calibrationReport.calibrationError < 0.1 ? '#10b981' : r.calibrationReport.calibrationError < 0.2 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.calibrationError * 100).toFixed(1)}%</span></div>
-
-<div style="margin-top:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Reliability (CAL)</div>
-<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.calibration < 0.03 ? '#10b981' : r.calibrationReport.brierDecomposition.calibration < 0.08 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.calibration.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Lower = better calibrated</div>
-</div>
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Resolution (RES)</div>
-<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierDecomposition.resolution > 0.05 ? '#10b981' : r.calibrationReport.brierDecomposition.resolution > 0.01 ? '#eab308' : '#ef4444'}">${r.calibrationReport.brierDecomposition.resolution.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Higher = stronger opinions</div>
-</div>
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
-<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div>
-<div style="font-size:10px;color:#4b5563">vs naive baseline</div>
-</div>
-</div>
-
-<div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
-<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Log Loss</div>
-<div style="font-size:18px;font-weight:700;color:#fff">${r.calibrationReport.logLoss.toFixed(4)}</div>
-<div style="font-size:10px;color:#4b5563">Skill: ${(r.calibrationReport.logLossSkill * 100).toFixed(1)}% vs naive — sensitive to rare events</div>
-</div>
-${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
-<div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Timeliness</div>
-<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.timeliness.timelinessScore >= 60 ? '#10b981' : r.calibrationReport.timeliness.timelinessScore >= 30 ? '#eab308' : '#ef4444'}">${r.calibrationReport.timeliness.timelinessScore}/100</div>
-<div style="font-size:10px;color:#4b5563">Avg ${r.calibrationReport.timeliness.avgDaysBeforeResolution.toFixed(0)}d before resolution, ${(r.calibrationReport.timeliness.earlyMoverPct * 100).toFixed(0)}% early mover</div>
-</div>` : ''}
-</div>
 </div>` : ''}
 
 ${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill vs. Luck Decomposition</div>
@@ -2512,31 +2256,7 @@ ${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top
 ${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
 </div>
 
-<div class="card" style="background:#0d1117;border:1px solid #1f2937">
-<div class="sec-title">What Does ${r.trustGrade}/${r.trustScore} Mean?</div>
-<p style="font-size:13px;color:#9ca3af;margin-bottom:8px;line-height:1.6">
-${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Their predictions are well-calibrated and consistently beat naive baselines.' :
-  r.trustGrade === 'B' ? 'This trader shows genuine forecasting skill with a meaningful edge across multiple markets.' :
-  r.trustGrade === 'C' ? 'This trader shows some skill signal, but not enough to clearly distinguish from luck. More data needed.' :
-  r.trustGrade === 'D' ? 'Below average. The data shows poor calibration, thin evidence, or both. When this trader expresses high confidence, events don\'t happen at the rate they imply.' :
-  'No demonstrated forecasting skill. This trader performs at or below random chance based on available data.'}
-</p>
-<p style="font-size:12px;color:#6b7280;line-height:1.6">
-<strong style="color:#9ca3af">Confidence:</strong> ${r.confidence.description}. ${r.confidence.margin <= 5 ? 'This score is highly reliable — enough resolved bets to be confident.' : r.confidence.margin <= 10 ? 'Moderate confidence — score may shift as more markets resolve.' : 'Low confidence — take this score with a grain of salt until more markets resolve.'}
-</p>
-<p style="font-size:11px;color:#4b5563;margin-top:8px">Methodology: Brier Score Decomposition (Murphy 1973), Log Loss, On-Chain USDC Verification. Same approach used by IARPA to identify superforecasters.</p>
-</div>
-
-<div class="card" style="text-align:center;background:#0d1117">
-<div class="sec-title">Share This Score</div>
-<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:#1d9bf0;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Post on X</a>
-<button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='Copied!'}.bind(this))" style="padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;border:none;cursor:pointer">Copy Link</button>
-<a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:#374151;color:#fff;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none">Score Card Image</a>
-</div>
-</div>
-
-<div class="foot"><strong>Not financial advice.</strong> VIGIL Trust Score is informational only.<br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
+<div class="foot"><strong>${pmEscape(r.disclaimer)}</strong><br/>Scored: ${r.scoredAt} | Source: ${r.dataSource}<br/>JSON: <a href="/v1/polymarket/${r.wallet}">/v1/polymarket/...</a> | <a href="/polymarket">/polymarket</a></div>
 </body></html>`;
 }
 
@@ -2653,7 +2373,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.17.0',
+    version: '1.12.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
@@ -2969,26 +2689,6 @@ app.get('/telegram/setup', async (req, res) => {
   res.json({ webhookUrl, result });
 });
 
-// ============================================================
-//  EMAIL CAPTURE ENDPOINT
-// ============================================================
-app.post('/subscribe', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@') || email.length < 5 || email.length > 200) {
-    return res.status(400).json({ error: 'Valid email required' });
-  }
-  if (emailSubscribers.has(email)) {
-    return res.json({ success: true, message: 'Already subscribed' });
-  }
-  emailSubscribers.add(email);
-  console.log(`[SUBSCRIBE] New subscriber: ${email} (total: ${emailSubscribers.size})`);
-  res.json({ success: true, message: 'Subscribed! We\'ll notify you on launch updates.' });
-});
-
-app.get('/subscribe/count', (_req, res) => {
-  res.json({ subscribers: emailSubscribers.size });
-});
-
 // --- 404 handler (must be last route) ---
 app.use((_req, res) => {
   res.status(404).json({
@@ -3005,7 +2705,7 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║       VIGIL Trust Score API v1.15.0              ║
+║       VIGIL Trust Score API v1.13.0              ║
 ║     On-chain credit bureau for AI agents         ║
 ╠══════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}               ║
@@ -3020,24 +2720,6 @@ async function start() {
     setTimeout(() => runPrescoringCron(), 30000);
     setInterval(() => runPrescoringCron(), 3600000);
     console.log('[BOOT] Prescore cron scheduled: 30s initial delay, then hourly');
-
-    // Schedule discovery crawler: 2 min after boot, then every 6 hours
-    // Scans resolved markets, discovers wallets, builds skill leaderboard
-    setTimeout(() => {
-      runDiscoveryCrawl({ maxMarkets: 50, maxToScore: 100 }).then(r => {
-        console.log(`[BOOT] Initial discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
-      }).catch(err => {
-        console.error('[BOOT] Initial discovery crawl failed:', err);
-      });
-    }, 120000); // 2 min delay — let prescore finish first
-    setInterval(() => {
-      runDiscoveryCrawl({ maxMarkets: 100, maxToScore: 200 }).then(r => {
-        console.log(`[CRON] Discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
-      }).catch(err => {
-        console.error('[CRON] Discovery crawl failed:', err);
-      });
-    }, 6 * 3600000); // every 6 hours
-    console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 6h');
   });
 
   // Start ACP evaluator listener in the background (optional, non-fatal)
@@ -3110,19 +2792,19 @@ async function runPrescoringCron(): Promise<void> {
   console.log(`[CRON] Pre-scoring complete. Cached ${prescoredCache.size} wallets.`);
 }
 
-// Pre-scored top Polymarket wallets (hardcoded, refreshable via cron)
-// Polymarket Top 10 by All-Time PnL — live VIGIL v1.17.0 scores (2026-04-12)
-const TOP_WALLETS: Array<{ wallet: string; name: string; pnl: number; grade: string; score: number; resolved: number; calibration: number }> = [
-  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D', score: 47, resolved: 11, calibration: 0 },
-  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 32, resolved: 20, calibration: 0 },
-  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 16, resolved: 10, calibration: 0 },
-  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D', score: 35, resolved: 24, calibration: 0 },
-  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 22, resolved: 0, calibration: 0 },
-  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 41, resolved: 901, calibration: 0 },
-  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 48, resolved: 164, calibration: 0 },
-  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 46, resolved: 246, calibration: 0 },
-  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D', score: 46, resolved: 794, calibration: 0 },
-  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 32, resolved: 928, calibration: 0 },
+// Pre-scored top Polymarket wallets (hardcoded, refreshable later)
+// Polymarket Top 10 by All-Time PnL — live VIGIL scores (2026-04-11)
+const TOP_WALLETS = [
+  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'F', score: 20, resolved: 0, calibration: 0 },
+  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 6, resolved: 20, calibration: 0 },
+  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 8, resolved: 10, calibration: 17 },
+  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'F', score: 16, resolved: 6, calibration: 21 },
+  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 13, resolved: 0, calibration: 0 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'C', score: 57, resolved: 932, calibration: 59 },
+  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 49, resolved: 178, calibration: 71 },
+  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'C', score: 62, resolved: 194, calibration: 0 },
+  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'F', score: 24, resolved: 794, calibration: 7 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'D', score: 48, resolved: 942, calibration: 84 },
 ];
 
 // Seed username cache from leaderboard on startup
@@ -3166,8 +2848,8 @@ function renderHomepage(): string {
   }).join('');
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VIGIL — Trust Scores for Polymarket Traders</title>
-<meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
+<title>VIGIL — Trust Scores for AI Agents &amp; Prediction Markets</title>
+<meta name="description" content="The first on-chain credit bureau for AI trading agents and prediction market traders. Calibration scoring, on-chain verification, skill vs luck decomposition.">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.7}
@@ -3240,41 +2922,20 @@ table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:backgroun
 function doSearch(e) {
   e.preventDefault();
   var q = document.getElementById('q').value.trim();
+  var v = document.getElementById('vertical').value;
   if (!q) return;
+  // Show loading state
   var btn = e.target.querySelector('button');
   btn.innerHTML = '<span class="spinner"></span> Scoring...';
   btn.disabled = true;
-  if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
-  else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
-}
-function doCompare(e) {
-  e.preventDefault();
-  var w1 = document.getElementById('cmp1').value.trim();
-  var w2 = document.getElementById('cmp2').value.trim();
-  if (!w1 || !w2) return;
-  window.location.href = '/polymarket/compare?wallets=' + encodeURIComponent(w1) + ',' + encodeURIComponent(w2);
-}
-function doSubscribe(e) {
-  e.preventDefault();
-  var email = document.getElementById('subemail').value.trim();
-  if (!email) return;
-  var btn = document.getElementById('subbtn');
-  btn.textContent = '...';
-  btn.disabled = true;
-  fetch('/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})})
-    .then(function(r){return r.json()})
-    .then(function(d){
-      document.getElementById('submsg').style.display='block';
-      document.getElementById('submsg').textContent=d.message||'Subscribed!';
-      btn.textContent='Done';
-    })
-    .catch(function(){
-      document.getElementById('submsg').style.display='block';
-      document.getElementById('submsg').style.color='#ef4444';
-      document.getElementById('submsg').textContent='Something went wrong. Try again.';
-      btn.textContent='Subscribe';
-      btn.disabled=false;
-    });
+  if (v === 'polymarket') {
+    if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
+    else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
+  } else if (v === 'degenclaw') {
+    window.location.href = '/degenclaw/' + encodeURIComponent(q);
+  } else if (v === 'onchain') {
+    window.location.href = '/v1/onchain/' + encodeURIComponent(q);
+  }
 }
 </script>
 </head><body>
@@ -3284,57 +2945,46 @@ function doSubscribe(e) {
   <div class="logo"><span>V</span>IGIL</div>
   <div class="nav-links">
     <a href="/polymarket">Polymarket</a>
-    <a href="/polymarket/compare">Compare</a>
-    <a href="/polymarket/leaderboard">Skill Leaderboard</a>
-    <a href="/api/pricing">API Pricing</a>
-    <a href="/v1">Docs</a>
+    <a href="/v1/health">API Health</a>
+    <a href="/v1">API Docs</a>
   </div>
 </div>
 
 <div class="hero">
-  <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
-  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D on VIGIL.</p>
+  <h1>Trust Scores for <em>AI Agents</em> &amp; <em>Prediction Markets</em></h1>
+  <p>Before you copy a trader, check if they're actually skilled — or just lucky. Paste any Polymarket wallet. We'll score their calibration, verify on-chain, and tell you if their edge is real.</p>
 </div>
 
 <div class="search-box">
   <form onsubmit="doSearch(event)">
-    <input type="text" id="q" placeholder="Wallet address (0x...) or username" autocomplete="off" />
+    <select id="vertical">
+      <option value="polymarket">Polymarket Wallet</option>
+      <option value="degenclaw">DegenClaw Agent</option>
+      <option value="onchain">On-Chain Lookup</option>
+    </select>
+    <input type="text" id="q" placeholder="Wallet address (0x...) or username (e.g. swisstony)" autocomplete="off" />
     <button type="submit">Score</button>
   </form>
 </div>
 
-<div class="email-box" style="max-width:500px;margin:0 auto 40px;text-align:center">
-  <p style="font-size:13px;color:#6b7280;margin-bottom:10px">Get notified when we launch new features</p>
-  <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
-    <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid #374151;background:#111827;color:#fff;font-size:14px;outline:none" />
-    <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:10px;border:none;background:#10b981;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap">Subscribe</button>
-  </form>
-  <div id="submsg" style="font-size:13px;margin-top:8px;color:#10b981;display:none"></div>
-</div>
-
 <div class="cards">
   <div class="card">
-    <h3>Score Any Wallet</h3>
-    <p>Paste a wallet address or username. Get a 6-dimension trust score in seconds. Calibration, live edge, profitability, consistency, discipline, sample size.</p>
+    <h3>Polymarket Traders</h3>
+    <p>Calibration scoring for prediction market traders. Brier scores, overconfidence detection, skill vs. luck decomposition. Does this trader actually know what's going to happen?</p>
     <span class="tag live">LIVE</span>
     <span class="tag chain">Polygon</span>
   </div>
   <div class="card">
-    <h3>Compare Head-to-Head</h3>
-    <p>Put two wallets side by side. See who's actually better across every dimension.</p>
-    <form onsubmit="doCompare(event)" style="display:flex;gap:6px;margin-top:8px">
-      <input type="text" id="cmp1" placeholder="Wallet 1" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
-      <input type="text" id="cmp2" placeholder="Wallet 2" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
-      <button type="submit" style="padding:8px 14px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:700;font-size:12px;cursor:pointer">Go</button>
-    </form>
+    <h3>DegenClaw AI Agents</h3>
+    <p>Trust scores for autonomous trading agents on Virtuals Protocol. Five-dimension risk analysis with historical grade snapshots every 6 hours.</p>
     <span class="tag live">LIVE</span>
-    <span class="tag chain">Polygon</span>
+    <span class="tag chain">Base</span>
   </div>
   <div class="card">
-    <h3>Chrome Extension</h3>
-    <p>See trust score badges directly on Polymarket profile pages. Coming soon to the Chrome Web Store.</p>
-    <span class="tag live">COMING SOON</span>
-    <span class="tag chain">Browser</span>
+    <h3>On-Chain Verification</h3>
+    <p>Wallet provenance scoring from Basescan. Age, transaction history, counterparty diversity, USDC flow cross-checks, protocol fingerprinting, sybil detection.</p>
+    <span class="tag live">LIVE</span>
+    <span class="tag chain">Base + Polygon</span>
   </div>
 </div>
 
@@ -3342,7 +2992,7 @@ function doSubscribe(e) {
 
 <div class="card" style="overflow-x:auto">
   <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Polymarket Top 10 by PnL — VIGIL Scored</div>
-  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
+  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket right now. Most of them are F-grade. That's the point.</p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
   <tr style="border-bottom:1px solid #1f2937">
     <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
@@ -3381,48 +3031,27 @@ ${recentRows.length > 0 ? `<div class="card">
 </div>
 
 <div class="dims">
-  <div class="dim"><div class="pct">25%</div><div class="label">Calibration</div></div>
-  <div class="dim"><div class="pct">25%</div><div class="label">Live Edge</div></div>
-  <div class="dim"><div class="pct">15%</div><div class="label">Profitability</div></div>
-  <div class="dim"><div class="pct">15%</div><div class="label">Consistency</div></div>
-  <div class="dim"><div class="pct">10%</div><div class="label">Discipline</div></div>
-  <div class="dim"><div class="pct">10%</div><div class="label">Sample Size</div></div>
-</div>
-
-<div class="card" style="margin-bottom:32px">
-  <h2 style="font-size:20px;color:#fff;margin-bottom:16px">What Do The Grades Mean?</h2>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #064e3b"><div style="font-size:28px;font-weight:800;color:#10b981">A</div><div style="font-size:11px;color:#6b7280">80-100</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Elite forecaster. Beats naive baselines by a wide margin. Rare.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #1e3a5f"><div style="font-size:28px;font-weight:800;color:#3b82f6">B</div><div style="font-size:11px;color:#6b7280">65-79</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Skilled. Consistent edge across multiple markets with real data.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #713f12"><div style="font-size:28px;font-weight:800;color:#eab308">C</div><div style="font-size:11px;color:#6b7280">50-64</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Average. Some skill signal, but not enough to distinguish from luck.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7c2d12"><div style="font-size:28px;font-weight:800;color:#f97316">D</div><div style="font-size:11px;color:#6b7280">35-49</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Below average. Data shows poor calibration or thin evidence.</div></div>
-    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7f1d1d"><div style="font-size:28px;font-weight:800;color:#ef4444">F</div><div style="font-size:11px;color:#6b7280">0-34</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">No demonstrated skill. Performs at or below random chance.</div></div>
-  </div>
-  <div style="font-size:13px;color:#6b7280;line-height:1.7">
-    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Confidence intervals</strong> tell you how reliable the grade is. A score of D/47 ± 3 (high confidence) means we're confident the true score is between 44 and 50 — there's enough data (200+ resolved bets) to be sure. A score of D/47 ± 25 (very low confidence) means the true score could be anywhere from 22 to 72 — take it with a grain of salt.</p>
-    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Brier Skill Score (BSS)</strong> compares a trader against a strategy that just predicts the historical average every time. Positive BSS = better than guessing. Negative BSS = worse than guessing. A BSS of -149% means they perform 2.5x worse than if they'd just said "50/50" on everything.</p>
-    <p><strong style="color:#9ca3af">How we score:</strong> Same methodology that IARPA used to identify superforecasters — Brier Score Decomposition (Murphy 1973), Log Loss for rare-event sensitivity, and on-chain USDC verification against Polygon. We measure whether traders can actually predict the future, not whether they're fast or lucky.</p>
-  </div>
+  <div class="dim"><div class="pct">30%</div><div class="label">Calibration</div></div>
+  <div class="dim"><div class="pct">20%</div><div class="label">Profitability</div></div>
+  <div class="dim"><div class="pct">20%</div><div class="label">Consistency</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Discipline</div></div>
+  <div class="dim"><div class="pct">15%</div><div class="label">Sample Size</div></div>
 </div>
 
 <div class="api-sec">
   <h2>API Endpoints</h2>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/compare</span></div><span class="desc">Compare two wallets head-to-head</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/leaderboard</span></div><span class="desc">Skill leaderboard — top wallets by forecasting ability</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/leaderboard/skill</span></div><span class="desc">JSON: Skill-ranked leaderboard</span></div>
-  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/polymarket/discover/crawl</span></div><span class="desc">Trigger wallet discovery crawl</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet</span></div><span class="desc">On-chain wallet provenance (Base + Polygon)</span></div>
-  <div class="endpoint"><div><span class="method">GET</span><span class="path">/api/pricing</span></div><span class="desc">API pricing and rate limits</span></div>
-  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/api/keys/create</span></div><span class="desc">Create API key for programmatic access</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet/sybil</span></div><span class="desc">Quick sybil detection check</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/score/:identifier</span></div><span class="desc">Trust score for a Virtuals Protocol agent</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/leaderboard</span></div><span class="desc">Paginated agent rankings</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/health</span></div><span class="desc">Service health + system status</span></div>
 </div>
 
 <div class="foot">
-  <strong>Not financial advice.</strong> VIGIL Trust Score is informational only. Scores may change as new data becomes available.<br/>
-  Past performance does not guarantee future results. Always do your own research.<br/>
-  Built by Freedom United Works &middot; v1.17.0 &middot; <a href="/privacy">Privacy Policy</a>
+  VIGIL Trust Score is informational only — not investment advice.<br/>
+  Built by Freedom United Works &middot; v1.13.0
 </div>
 
 </div>
