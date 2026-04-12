@@ -3211,6 +3211,31 @@ function renderHomepage(): string {
 </tr>`;
   }).join('');
 
+  // Build VIGIL Top 10 by Skill (from discovery crawler)
+  const skillTop10 = getSkillLeaderboard().slice(0, 10);
+  const skillTop10Rows = skillTop10.length > 0 ? skillTop10.map((e, i) => {
+    const gc = gradeColor(e.trustGrade);
+    const pnl = e.realizedPnl >= 0
+      ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
+      : `<span style="color:#ef4444">-$${Math.round(Math.abs(e.realizedPnl)).toLocaleString()}</span>`;
+    const bssRaw = e.brierSkillScore * 100;
+    const bssCapped = Math.max(-999, Math.min(999, bssRaw));
+    const bss = bssRaw >= 0
+      ? `<span style="color:#10b981">+${bssCapped.toFixed(0)}%</span>`
+      : `<span style="color:#ef4444">${bssCapped.toFixed(0)}%</span>`;
+    const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
+    const rowBg = i % 2 === 0 ? '' : 'background:#0d0d0d;';
+    return `<tr onclick="window.location='/polymarket/${e.wallet}'" style="cursor:pointer;border-bottom:1px solid #1a1a1a;${rowBg}transition:background .15s" onmouseover="this.style.background='#151515'" onmouseout="this.style.background='${i % 2 === 0 ? '' : '#0d0d0d'}'">
+<td style="padding:10px 8px;color:#555;font-family:'JetBrains Mono',monospace;font-size:12px">${i + 1}</td>
+<td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#00d4aa;text-decoration:none;font-weight:600">${hEsc(name)}</a></td>
+<td style="padding:10px 8px;text-align:center"><span style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${e.trustGrade}</span></td>
+<td style="padding:10px 8px;text-align:center;color:#fff;font-weight:700;font-family:'JetBrains Mono',monospace">${e.trustScore}</td>
+<td style="padding:10px 8px;text-align:center">${bss}</td>
+<td style="padding:10px 8px;text-align:center;color:#e8e8e8">${e.resolvedBets}</td>
+<td style="padding:10px 8px;text-align:right">${pnl}</td>
+</tr>`;
+  }).join('') : '';
+
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL — Trust Scores for Polymarket Traders</title>
 <meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
@@ -3362,8 +3387,8 @@ function doSubscribe(e) {
 
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:48px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;background:#0a0a0a">
   <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">600+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Wallets Scanned</div></div>
-  <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">0</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">A-Grade Found</div></div>
-  <div style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">1</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">B-Grade Found</div></div>
+  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#ef4444;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">0</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">A-Grade Found</div></a>
+  <a href="/polymarket/leaderboard" style="text-align:center;padding:28px 16px;border-right:1px solid #1a1a1a;text-decoration:none;display:block;transition:background .2s" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'"><div style="font-size:28px;font-weight:800;color:#00d4aa;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">${skillTop10.filter(e => e.trustGrade === 'B').length || 1}</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">B-Grade Found</div></a>
   <div style="text-align:center;padding:28px 16px"><div style="font-size:28px;font-weight:800;color:#555;font-family:'JetBrains Mono','SF Mono',monospace;line-height:1">500+</div><div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:3px;margin-top:8px">Markets Crawled</div></div>
 </div>
 
@@ -3410,6 +3435,23 @@ function doSubscribe(e) {
     <span class="tag chain">Browser</span>
   </div>
 </div>
+
+${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-bottom:48px;background:#0a0a0a;border-color:#1e1e1e">
+  <div class="sec-hdr">VIGIL Top 10 — Ranked by Skill</div>
+  <p style="font-size:14px;color:#707070;margin-bottom:16px">The highest-scoring wallets discovered by VIGIL's crawler — ranked by actual forecasting skill, not profit. <a href="/polymarket/leaderboard" style="color:#00d4aa">View full leaderboard →</a></p>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="border-bottom:2px solid #1e1e1e">
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">#</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">Trader</th>
+    <th style="text-align:center;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">Grade</th>
+    <th style="text-align:center;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">Score</th>
+    <th style="text-align:center;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">BSS</th>
+    <th style="text-align:center;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">Resolved</th>
+    <th style="text-align:right;padding:8px 6px;color:#555;font-size:10px;text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace">PnL</th>
+  </tr>
+  ${skillTop10Rows}
+  </table>
+</div>` : ''}
 
 <div style="display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:56px">
 
