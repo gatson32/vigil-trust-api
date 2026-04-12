@@ -453,7 +453,7 @@ app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();
   res.json({
     status: 'ok',
-    version: '1.12.0',
+    version: '1.16.0',
     service: 'VIGIL Trust Score API',
     timestamp: new Date().toISOString(),
     upstream: {
@@ -2475,7 +2475,7 @@ app.get('/v1/degenclaw/:agent/history', async (req, res) => {
 app.get('/v1', (_req, res) => {
   res.json({
     service: 'VIGIL Trust Score API',
-    version: '1.12.0',
+    version: '1.16.0',
     description: 'On-chain credit bureau and evaluator agent for AI agents on Virtuals Protocol',
     endpoints: {
       'GET /v1/health': 'Service health check + upstream status + rate limit info',
