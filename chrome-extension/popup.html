@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      padding: 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #1f2937;
+    }
+    .logo { font-size: 20px; font-weight: 800; letter-spacing: 2px; }
+    .sub { font-size: 11px; color: #6b7280; margin-top: 4px; }
+    .search-box {
+      width: 100%;
+      padding: 10px 12px;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+      margin-bottom: 12px;
+    }
+    .search-box:focus { border-color: #3b82f6; }
+    .search-box::placeholder { color: #4b5563; }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn-secondary {
+      background: #1f2937;
+      color: #9ca3af;
+    }
+    .btn-secondary:hover { background: #374151; color: #fff; }
+    .result {
+      display: none;
+      margin-top: 12px;
+      padding: 12px;
+      background: #111827;
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+    }
+    .result-grade {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .grade-circle {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 20px;
+    }
+    .grade-A { background: rgba(16,185,129,0.2); color: #10b981; }
+    .grade-B { background: rgba(59,130,246,0.2); color: #3b82f6; }
+    .grade-C { background: rgba(234,179,8,0.2); color: #eab308; }
+    .grade-D { background: rgba(249,115,22,0.2); color: #f97316; }
+    .grade-F { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .result-score { font-size: 24px; font-weight: 700; }
+    .result-tier { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; }
+    .result-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    .result-label { color: #6b7280; }
+    .result-val { color: #d1d5db; font-weight: 600; }
+    .error { color: #ef4444; font-size: 12px; margin-top: 8px; display: none; }
+    .footer {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 10px;
+      color: #374151;
+    }
+    .footer a { color: #4b5563; text-decoration: none; }
+    .footer a:hover { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">VIGIL</div>
+    <div class="sub">Trust Score for Prediction Markets</div>
+  </div>
+
+  <input type="text" class="search-box" id="walletInput"
+    placeholder="Paste wallet address or ENS name...">
+
+  <button class="btn" id="scoreBtn">Score This Trader</button>
+  <button class="btn btn-secondary" id="siteBtn">Open VIGIL Homepage</button>
+
+  <div class="error" id="error"></div>
+
+  <div class="result" id="result">
+    <div class="result-grade">
+      <div class="grade-circle" id="gradeCircle">-</div>
+      <div>
+        <div class="result-score" id="scoreVal">-</div>
+        <div class="result-tier" id="tierVal">-</div>
+      </div>
+    </div>
+    <div class="result-row"><span class="result-label">PnL</span><span class="result-val" id="pnlVal">-</span></div>
+    <div class="result-row"><span class="result-label">Resolved Bets</span><span class="result-val" id="resolvedVal">-</span></div>
+    <div class="result-row"><span class="result-label">Calibration</span><span class="result-val" id="calVal">-</span></div>
+    <div class="result-row"><span class="result-label">Live Edge</span><span class="result-val" id="edgeVal">-</span></div>
+    <div class="result-row"><span class="result-label">Win Rate</span><span class="result-val" id="winVal">-</span></div>
+    <button class="btn" id="fullBtn" style="margin-top:10px">View Full Scorecard</button>
+  </div>
+
+  <div class="footer">
+    <a href="https://vigil-trust-api.onrender.com" target="_blank">vigil-trust-api.onrender.com</a>
+  </div>
+
+  <script>
+    const API = 'https://vigil-trust-api.onrender.com/v1/polymarket';
+    const SITE = 'https://vigil-trust-api.onrender.com/polymarket';
+    let currentWallet = '';
+
+    document.getElementById('scoreBtn').addEventListener('click', async () => {
+      const input = document.getElementById('walletInput').value.trim();
+      if (!input) return;
+
+      const errEl = document.getElementById('error');
+      const resultEl = document.getElementById('result');
+      errEl.style.display = 'none';
+      resultEl.style.display = 'none';
+
+      document.getElementById('scoreBtn').textContent = 'Scoring...';
+
+      try {
+        const res = await fetch(`${API}/${input}`);
+        if (!res.ok) throw new Error('Wallet not found or no trading data');
+        const d = await res.json();
+
+        currentWallet = d.wallet || input;
+
+        document.getElementById('gradeCircle').textContent = d.trustGrade;
+        document.getElementById('gradeCircle').className = `grade-circle grade-${d.trustGrade}`;
+        document.getElementById('scoreVal').textContent = `${d.trustScore}/100`;
+        document.getElementById('tierVal').textContent = d.trustTier;
+
+        const pnl = d.totalPnl || 0;
+        document.getElementById('pnlVal').textContent = pnl >= 0
+          ? `+$${Math.round(pnl).toLocaleString()}`
+          : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
+        document.getElementById('pnlVal').style.color = pnl >= 0 ? '#10b981' : '#ef4444';
+
+        document.getElementById('resolvedVal').textContent = d.resolvedBets || 0;
+        document.getElementById('calVal').textContent = `${d.calibration ?? '-'}/100`;
+        document.getElementById('edgeVal').textContent = `${d.liveEdge ?? '-'}/100`;
+        document.getElementById('winVal').textContent = d.winRate != null
+          ? `${(d.winRate * 100).toFixed(1)}%` : '-';
+
+        resultEl.style.display = 'block';
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      }
+
+      document.getElementById('scoreBtn').textContent = 'Score This Trader';
+    });
+
+    document.getElementById('walletInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('scoreBtn').click();
+    });
+
+    document.getElementById('siteBtn').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://vigil-trust-api.onrender.com' });
+    });
+
+    document.getElementById('fullBtn').addEventListener('click', () => {
+      if (currentWallet) {
+        chrome.tabs.create({ url: `${SITE}/${currentWallet}` });
+      }
+    });
+  </script>
+</body>
+</html>

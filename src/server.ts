@@ -1686,6 +1686,95 @@ app.get('/v1/polymarket/recent', (_req, res) => {
 });
 
 // ============================================================
+//  COMPARE ENDPOINT — side-by-side wallet scorecards
+// ============================================================
+app.get('/v1/polymarket/compare', async (req, res) => {
+  try {
+    const walletsParam = String(req.query.wallets || '');
+    const wallets = walletsParam.split(',').map(w => w.trim().toLowerCase()).filter(w => w.startsWith('0x'));
+    if (wallets.length < 2 || wallets.length > 5) {
+      return res.status(400).json({ error: 'INVALID_PARAMS', message: 'Provide 2-5 comma-separated wallet addresses via ?wallets=0x...,0x...' });
+    }
+
+    const results = await Promise.allSettled(wallets.map(w => scorePolymarketTrader(w)));
+    const scores = results.map((r, i) => {
+      if (r.status === 'fulfilled' && r.value) {
+        return r.value;
+      }
+      return { wallet: wallets[i], error: 'No data found', trustScore: null, trustGrade: null };
+    });
+
+    res.json({
+      compared: scores.length,
+      wallets: scores,
+      scoredAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'COMPARE_FAILED', message: (err as Error).message });
+  }
+});
+
+// HTML: side-by-side compare page
+app.get('/polymarket/compare', async (req, res) => {
+  try {
+    const walletsParam = String(req.query.wallets || '');
+    const wallets = walletsParam.split(',').map(w => w.trim().toLowerCase()).filter(w => w.startsWith('0x'));
+    if (wallets.length < 2 || wallets.length > 5) {
+      return res.status(400).type('html').send(`<html><body style="background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center"><h2>Compare 2-5 wallets</h2><p style="color:#6b7280">Usage: /polymarket/compare?wallets=0x...,0x...</p></body></html>`);
+    }
+
+    const results = await Promise.allSettled(wallets.map(w => scorePolymarketTrader(w)));
+    const cards = results.map((r, i) => {
+      if (r.status !== 'fulfilled' || !r.value) {
+        return `<div style="flex:1;min-width:200px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937"><p style="color:#ef4444">No data for ${wallets[i].slice(0,8)}...</p></div>`;
+      }
+      const d = r.value;
+      const gc = d.trustGrade === 'A' ? '#10b981' : d.trustGrade === 'B' ? '#3b82f6' : d.trustGrade === 'C' ? '#eab308' : d.trustGrade === 'D' ? '#f97316' : '#ef4444';
+      const totalPnl = d.raw.totalPnl;
+      const pnl = totalPnl >= 0 ? `+$${Math.round(totalPnl).toLocaleString()}` : `-$${Math.round(Math.abs(totalPnl)).toLocaleString()}`;
+      const pnlColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
+      const name = d.displayName || d.wallet.slice(0, 10) + '...';
+      const dims = [
+        ['Calibration', d.calibration],
+        ['Live Edge', (d as any).liveEdge ?? '-'],
+        ['Profitability', d.profitability],
+        ['Consistency', d.consistency],
+        ['Discipline', d.discipline],
+        ['Sample Size', d.sampleSize],
+      ];
+      const dimRows = dims.map(([label, val]) => {
+        const v = typeof val === 'number' ? val : 0;
+        return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:#6b7280">${label}</span><span style="color:#fff;font-weight:600">${val}</span></div>`;
+      }).join('');
+
+      return `<div style="flex:1;min-width:220px;background:#111827;border-radius:12px;padding:20px;border:1px solid #1f2937">
+        <div style="text-align:center;margin-bottom:12px">
+          <div style="display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:${gc}20;color:${gc};font-size:24px;font-weight:800;border:2px solid ${gc}40">${d.trustGrade}</div>
+          <div style="font-size:28px;font-weight:800;color:#fff;margin-top:4px">${d.trustScore}</div>
+          <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">${d.trustTier}</div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#fff;text-align:center;margin-bottom:4px">${hEsc(name)}</div>
+        <div style="font-size:11px;color:#4b5563;text-align:center;font-family:monospace;margin-bottom:12px">${d.wallet.slice(0,10)}...${d.wallet.slice(-4)}</div>
+        <div style="text-align:center;font-size:18px;font-weight:700;color:${pnlColor};margin-bottom:12px">${pnl}</div>
+        <div style="border-top:1px solid #1f2937;padding-top:10px">${dimRows}</div>
+        <a href="/polymarket/${d.wallet}" style="display:block;text-align:center;margin-top:12px;padding:6px;background:#1f2937;border-radius:6px;color:#9ca3af;text-decoration:none;font-size:11px;font-weight:600">Full Scorecard &rarr;</a>
+      </div>`;
+    }).join('');
+
+    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL Compare</title></head>
+    <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+      <div style="max-width:1000px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:24px"><a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a><span style="color:#6b7280;font-size:13px;margin-left:12px">Compare</span></div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${cards}</div>
+        <div style="text-align:center;margin-top:20px;color:#374151;font-size:11px">VIGIL Trust Score is informational only.</div>
+      </div>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${(err as Error).message}</body></html>`);
+  }
+});
+
+// ============================================================
 //  ON-CHAIN VERIFICATION ENDPOINTS (v1.11.0)
 // ============================================================
 
