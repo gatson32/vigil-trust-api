@@ -414,7 +414,13 @@ app.get('/privacy', (_req, res) => {
 <p style="color:#6b7280;font-size:13px">Last updated: April 12, 2026</p>
 
 <h2 style="color:#fff;font-size:18px;margin-top:32px">What We Collect</h2>
-<p>VIGIL does not collect, store, or transmit any personal data. The Chrome extension and web application operate without user accounts, logins, cookies, or tracking.</p>
+<p>VIGIL collects minimal data necessary to operate the service. We do not require user accounts or logins for basic scoring. Specifically:</p>
+<ul style="margin:8px 0;padding-left:20px">
+<li><strong>Email addresses</strong> — only if you voluntarily subscribe to our newsletter or create an API key.</li>
+<li><strong>API request logs</strong> — IP address, timestamp, and endpoint, retained for up to 30 days for rate limiting and abuse prevention.</li>
+<li><strong>Telegram chat IDs</strong> — only if you interact with our Telegram bot, used solely to deliver responses.</li>
+</ul>
+<p>We do not use cookies, analytics trackers, or browser fingerprinting. We do not link wallet addresses to personal identities.</p>
 
 <h2 style="color:#fff;font-size:18px;margin-top:32px">Chrome Extension</h2>
 <p>The VIGIL Chrome extension reads only the wallet address from Polymarket page URLs to fetch trust score data from the VIGIL API. It does not access browsing history, form data, credentials, or any other personal information. No data is sent to any third party.</p>
@@ -2349,6 +2355,21 @@ ${r.onChain.provenance.flags.map(f => `<div class="signal red" style="margin-top
 ${r.reasoning.map(line => `<p style="font-size:13px;color:#9ca3af;margin-bottom:6px">${pmEscape(line)}</p>`).join('')}
 </div>
 
+<div class="card" style="background:#0d1117;border:1px solid #1f2937">
+<div class="sec-title">What Does ${r.trustGrade}/${r.trustScore} Mean?</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:8px;line-height:1.6">
+${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Their predictions are well-calibrated and consistently beat naive baselines.' :
+  r.trustGrade === 'B' ? 'This trader shows genuine forecasting skill with a meaningful edge across multiple markets.' :
+  r.trustGrade === 'C' ? 'This trader shows some skill signal, but not enough to clearly distinguish from luck. More data needed.' :
+  r.trustGrade === 'D' ? 'Below average. The data shows poor calibration, thin evidence, or both. When this trader expresses high confidence, events don\'t happen at the rate they imply.' :
+  'No demonstrated forecasting skill. This trader performs at or below random chance based on available data.'}
+</p>
+<p style="font-size:12px;color:#6b7280;line-height:1.6">
+<strong style="color:#9ca3af">Confidence:</strong> ${r.confidence.description}. ${r.confidence.margin <= 5 ? 'This score is highly reliable — enough resolved bets to be confident.' : r.confidence.margin <= 10 ? 'Moderate confidence — score may shift as more markets resolve.' : 'Low confidence — take this score with a grain of salt until more markets resolve.'}
+</p>
+<p style="font-size:11px;color:#4b5563;margin-top:8px">Methodology: Brier Score Decomposition (Murphy 1973), Log Loss, On-Chain USDC Verification. Same approach used by IARPA to identify superforecasters.</p>
+</div>
+
 <div class="card" style="text-align:center;background:#0d1117">
 <div class="sec-title">Share This Score</div>
 <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
@@ -2914,19 +2935,19 @@ async function runPrescoringCron(): Promise<void> {
   console.log(`[CRON] Pre-scoring complete. Cached ${prescoredCache.size} wallets.`);
 }
 
-// Pre-scored top Polymarket wallets (hardcoded, refreshable later)
+// Pre-scored top Polymarket wallets (hardcoded, refreshable via cron)
 // Polymarket Top 10 by All-Time PnL — live VIGIL v1.17.0 scores (2026-04-12)
-const TOP_WALLETS = [
-  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D' as const, score: 47, resolved: 11, calibration: 0 },
-  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F' as const, score: 32, resolved: 20, calibration: 0 },
-  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F' as const, score: 16, resolved: 10, calibration: 0 },
-  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D' as const, score: 35, resolved: 24, calibration: 0 },
-  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F' as const, score: 22, resolved: 0, calibration: 0 },
-  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D' as const, score: 44, resolved: 902, calibration: 0 },
-  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D' as const, score: 44, resolved: 92, calibration: 0 },
-  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D' as const, score: 47, resolved: 242, calibration: 0 },
-  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D' as const, score: 46, resolved: 796, calibration: 0 },
-  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F' as const, score: 19, resolved: 935, calibration: 0 },
+const TOP_WALLETS: Array<{ wallet: string; name: string; pnl: number; grade: string; score: number; resolved: number; calibration: number }> = [
+  { wallet: '0x492442eab586f242b53bda933fd5de859c8a3782', name: '0x4924...3782', pnl: 6447366, grade: 'D', score: 47, resolved: 11, calibration: 0 },
+  { wallet: '0x02227b8f5a9636e895607edd3185ed6ee5598ff7', name: 'HorizonSplendidView', pnl: 4016108, grade: 'F', score: 32, resolved: 20, calibration: 0 },
+  { wallet: '0xefbc5fec8d7b0acdc8911bdd9a98d6964308f9a2', name: 'reachingthesky', pnl: 3742635, grade: 'F', score: 16, resolved: 10, calibration: 0 },
+  { wallet: '0xc2e7800b5af46e6093872b177b7a5e7f0563be51', name: 'beachboy4', pnl: 3189505, grade: 'D', score: 35, resolved: 24, calibration: 0 },
+  { wallet: '0x019782cab5d844f02bafb71f512758be78579f3c', name: 'majorexploiter', pnl: 2416975, grade: 'F', score: 22, resolved: 0, calibration: 0 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 2165723, grade: 'D', score: 44, resolved: 902, calibration: 0 },
+  { wallet: '0xee613b3fc183ee44f9da9c05f53e2da107e3debf', name: 'sovereign2013', pnl: 1787032, grade: 'D', score: 44, resolved: 92, calibration: 0 },
+  { wallet: '0x2a2c53bd278c04da9962fcf96490e17f3dfb9bc1', name: '0x2A2C...9Bc1', pnl: 1761582, grade: 'D', score: 47, resolved: 242, calibration: 0 },
+  { wallet: '0xbddf61af533ff524d27154e589d2d7a81510c684', name: 'Countryside', pnl: 1564129, grade: 'D', score: 46, resolved: 796, calibration: 0 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'F', score: 19, resolved: 935, calibration: 0 },
 ];
 
 // Seed username cache from leaderboard on startup
@@ -3051,6 +3072,13 @@ function doSearch(e) {
   if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
   else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
 }
+function doCompare(e) {
+  e.preventDefault();
+  var w1 = document.getElementById('cmp1').value.trim();
+  var w2 = document.getElementById('cmp2').value.trim();
+  if (!w1 || !w2) return;
+  window.location.href = '/polymarket/compare?wallets=' + encodeURIComponent(w1) + ',' + encodeURIComponent(w2);
+}
 function doSubscribe(e) {
   e.preventDefault();
   var email = document.getElementById('subemail').value.trim();
@@ -3117,7 +3145,12 @@ function doSubscribe(e) {
   </div>
   <div class="card">
     <h3>Compare Head-to-Head</h3>
-    <p>Put two wallets side by side. See who's actually better across every dimension. Link: /polymarket/compare</p>
+    <p>Put two wallets side by side. See who's actually better across every dimension.</p>
+    <form onsubmit="doCompare(event)" style="display:flex;gap:6px;margin-top:8px">
+      <input type="text" id="cmp1" placeholder="Wallet 1" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
+      <input type="text" id="cmp2" placeholder="Wallet 2" style="flex:1;padding:8px;border-radius:6px;border:1px solid #374151;background:#0a0e1a;color:#fff;font-size:12px" />
+      <button type="submit" style="padding:8px 14px;border-radius:6px;border:none;background:#3b82f6;color:#fff;font-weight:700;font-size:12px;cursor:pointer">Go</button>
+    </form>
     <span class="tag live">LIVE</span>
     <span class="tag chain">Polygon</span>
   </div>
@@ -3133,7 +3166,7 @@ function doSubscribe(e) {
 
 <div class="card" style="overflow-x:auto">
   <div class="sec-title" style="text-transform:uppercase;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:1px;margin-bottom:16px">Polymarket Top 10 by PnL — VIGIL Scored</div>
-  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket right now. Most of them are F-grade. That's the point.</p>
+  <p style="font-size:14px;color:#9ca3af;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
   <tr style="border-bottom:1px solid #1f2937">
     <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase">#</th>
@@ -3180,6 +3213,22 @@ ${recentRows.length > 0 ? `<div class="card">
   <div class="dim"><div class="pct">10%</div><div class="label">Sample Size</div></div>
 </div>
 
+<div class="card" style="margin-bottom:32px">
+  <h2 style="font-size:20px;color:#fff;margin-bottom:16px">What Do The Grades Mean?</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #064e3b"><div style="font-size:28px;font-weight:800;color:#10b981">A</div><div style="font-size:11px;color:#6b7280">80-100</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Elite forecaster. Beats naive baselines by a wide margin. Rare.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #1e3a5f"><div style="font-size:28px;font-weight:800;color:#3b82f6">B</div><div style="font-size:11px;color:#6b7280">65-79</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Skilled. Consistent edge across multiple markets with real data.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #713f12"><div style="font-size:28px;font-weight:800;color:#eab308">C</div><div style="font-size:11px;color:#6b7280">50-64</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Average. Some skill signal, but not enough to distinguish from luck.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7c2d12"><div style="font-size:28px;font-weight:800;color:#f97316">D</div><div style="font-size:11px;color:#6b7280">35-49</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">Below average. Data shows poor calibration or thin evidence.</div></div>
+    <div style="text-align:center;padding:12px;border-radius:8px;border:1px solid #7f1d1d"><div style="font-size:28px;font-weight:800;color:#ef4444">F</div><div style="font-size:11px;color:#6b7280">0-34</div><div style="font-size:12px;color:#9ca3af;margin-top:4px">No demonstrated skill. Performs at or below random chance.</div></div>
+  </div>
+  <div style="font-size:13px;color:#6b7280;line-height:1.7">
+    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Confidence intervals</strong> tell you how reliable the grade is. A score of D/47 ± 3 (high confidence) means we're confident the true score is between 44 and 50 — there's enough data (200+ resolved bets) to be sure. A score of D/47 ± 25 (very low confidence) means the true score could be anywhere from 22 to 72 — take it with a grain of salt.</p>
+    <p style="margin-bottom:8px"><strong style="color:#9ca3af">Brier Skill Score (BSS)</strong> compares a trader against a strategy that just predicts the historical average every time. Positive BSS = better than guessing. Negative BSS = worse than guessing. A BSS of -149% means they perform 2.5x worse than if they'd just said "50/50" on everything.</p>
+    <p><strong style="color:#9ca3af">How we score:</strong> Same methodology that IARPA used to identify superforecasters — Brier Score Decomposition (Murphy 1973), Log Loss for rare-event sensitivity, and on-chain USDC verification against Polygon. We measure whether traders can actually predict the future, not whether they're fast or lucky.</p>
+  </div>
+</div>
+
 <div class="api-sec">
   <h2>API Endpoints</h2>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
@@ -3194,7 +3243,7 @@ ${recentRows.length > 0 ? `<div class="card">
 <div class="foot">
   <strong>Not financial advice.</strong> VIGIL Trust Score is informational only. Scores may change as new data becomes available.<br/>
   Past performance does not guarantee future results. Always do your own research.<br/>
-  Built by Freedom United Works &middot; v1.15.0 &middot; <a href="/privacy">Privacy Policy</a>
+  Built by Freedom United Works &middot; v1.17.0 &middot; <a href="/privacy">Privacy Policy</a>
 </div>
 
 </div>
