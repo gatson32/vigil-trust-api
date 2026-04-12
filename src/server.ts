@@ -69,7 +69,10 @@ interface RecentScore {
   scoredAt: string;
 }
 const recentScores: RecentScore[] = [];
-const MAX_RECENT = 20;
+const MAX_RECENT = 50;
+
+// Username → wallet lookup cache. Grows as wallets get scored.
+const usernameToWallet = new Map<string, string>();
 
 function addRecentScore(r: PolymarketRiskReport): void {
   // Avoid duplicates — remove existing entry for same wallet
@@ -85,6 +88,33 @@ function addRecentScore(r: PolymarketRiskReport): void {
     scoredAt: r.scoredAt,
   });
   if (recentScores.length > MAX_RECENT) recentScores.pop();
+
+  // Index username → wallet for search
+  if (r.displayName && r.displayName !== r.wallet) {
+    usernameToWallet.set(r.displayName.toLowerCase(), r.wallet);
+  }
+  if (r.pseudonym) {
+    usernameToWallet.set(r.pseudonym.toLowerCase(), r.wallet);
+  }
+}
+
+// Resolve an identifier to a wallet address
+// Accepts: 0x address, Polymarket username, or partial match
+function resolveWalletIdentifier(input: string): string | null {
+  const trimmed = input.trim();
+  if (trimmed.startsWith('0x') && trimmed.length >= 40) return trimmed.toLowerCase();
+
+  // Exact username match
+  const exact = usernameToWallet.get(trimmed.toLowerCase());
+  if (exact) return exact;
+
+  // Partial match — find first username containing the search term
+  const lower = trimmed.toLowerCase();
+  for (const [name, wallet] of usernameToWallet) {
+    if (name.includes(lower)) return wallet;
+  }
+
+  return null;
 }
 
 // Rate limiting — simple in-memory sliding window
@@ -1659,9 +1689,51 @@ app.get('/v1/polymarket/:wallet', async (req, res) => {
   }
 });
 
+// Search endpoint — resolve username/partial to wallet and redirect
+app.get('/polymarket/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.redirect('/');
+
+  const wallet = resolveWalletIdentifier(q);
+  if (wallet) return res.redirect(`/polymarket/${wallet}`);
+
+  // Not in cache — try as raw wallet address anyway
+  if (q.startsWith('0x') && q.length >= 40) return res.redirect(`/polymarket/${q}`);
+
+  // Unknown username — show not found
+  res.status(404).type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Not Found</title></head>
+  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center">
+    <div style="font-size:28px;font-weight:800;letter-spacing:3px;margin-bottom:16px">VIGIL</div>
+    <div style="font-size:18px;color:#ef4444;margin-bottom:12px">Username "${hEsc(q)}" not found</div>
+    <p style="color:#6b7280;max-width:400px">Try pasting a full wallet address (0x...), or search for a trader who has been scored recently. The username cache grows as more wallets get scored.</p>
+    <a href="/" style="margin-top:20px;color:#3b82f6;text-decoration:none">Back to VIGIL</a>
+  </body></html>`);
+});
+
+// JSON search endpoint
+app.get('/v1/polymarket/search', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) return res.json({ results: [] });
+
+  const results: { name: string; wallet: string }[] = [];
+  for (const [name, wallet] of usernameToWallet) {
+    if (name.includes(q)) results.push({ name, wallet });
+    if (results.length >= 10) break;
+  }
+  res.json({ query: q, results });
+});
+
 // HTML score card for a Polymarket trader
 app.get('/polymarket/:wallet', async (req, res) => {
-  const wallet = String(req.params.wallet || '').trim();
+  let wallet = String(req.params.wallet || '').trim();
+
+  // If not a wallet address, try username resolution
+  if (!wallet.startsWith('0x')) {
+    const resolved = resolveWalletIdentifier(wallet);
+    if (resolved) return res.redirect(`/polymarket/${resolved}`);
+    return res.status(404).type('html').send(renderPolymarketNotFound(wallet));
+  }
+
   try {
     const report = await scorePolymarketTrader(wallet);
     if (!report) {
@@ -1683,6 +1755,105 @@ app.get('/polymarket', (_req, res) => {
 // JSON API: recently scored wallets
 app.get('/v1/polymarket/recent', (_req, res) => {
   res.json(recentScores);
+});
+
+// ============================================================
+//  OG IMAGE GENERATOR — branded SVG scorecard for social sharing
+// ============================================================
+app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
+  try {
+    const wallet = String(req.params.wallet || '').trim();
+    const report = await scorePolymarketTrader(wallet);
+    if (!report) return res.status(404).send('Not found');
+
+    const gc = report.trustGrade === 'A' ? '#10b981' : report.trustGrade === 'B' ? '#3b82f6' : report.trustGrade === 'C' ? '#eab308' : report.trustGrade === 'D' ? '#f97316' : '#ef4444';
+    const pnl = report.raw.totalPnl;
+    const pnlStr = pnl >= 0 ? `+$${Math.round(pnl).toLocaleString()}` : `-$${Math.round(Math.abs(pnl)).toLocaleString()}`;
+    const pnlColor = pnl >= 0 ? '#10b981' : '#ef4444';
+    const name = report.displayName.length > 20 ? report.displayName.slice(0, 18) + '...' : report.displayName;
+    const dims = [
+      { label: 'Calibration', val: report.calibration },
+      { label: 'Live Edge', val: (report as any).liveEdge ?? 50 },
+      { label: 'Profitability', val: report.profitability },
+      { label: 'Consistency', val: report.consistency },
+      { label: 'Discipline', val: report.discipline },
+      { label: 'Sample Size', val: report.sampleSize },
+    ];
+
+    const dimBars = dims.map((d, i) => {
+      const y = 220 + i * 38;
+      const barWidth = Math.max(2, (d.val / 100) * 280);
+      return `
+        <text x="40" y="${y + 14}" fill="#6b7280" font-size="13" font-family="system-ui,sans-serif">${d.label}</text>
+        <rect x="170" y="${y + 2}" width="280" height="14" rx="7" fill="#1f2937"/>
+        <rect x="170" y="${y + 2}" width="${barWidth}" height="14" rx="7" fill="${gc}"/>
+        <text x="460" y="${y + 14}" fill="#fff" font-size="13" font-weight="600" font-family="system-ui,sans-serif">${d.val}</text>
+      `;
+    }).join('');
+
+    // Top flags (max 2)
+    const topFlags = report.flags.slice(0, 2).map((f, i) => {
+      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
+      return `<text x="40" y="${475 + i * 22}" fill="#ef4444" font-size="11" font-family="system-ui,sans-serif">\u26A0 ${hEsc(short)}</text>`;
+    }).join('');
+    const topGreens = report.greenFlags.slice(0, 1).map((f, i) => {
+      const short = f.length > 55 ? f.slice(0, 52) + '...' : f;
+      return `<text x="40" y="${475 + report.flags.slice(0, 2).length * 22 + i * 22}" fill="#10b981" font-size="11" font-family="system-ui,sans-serif">\u2713 ${hEsc(short)}</text>`;
+    }).join('');
+
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 600 315">
+  <rect width="600" height="315" fill="#0a0a0a"/>
+  <rect x="0" y="0" width="600" height="4" fill="${gc}"/>
+
+  <!-- Logo -->
+  <text x="40" y="42" fill="#fff" font-size="18" font-weight="800" letter-spacing="3" font-family="system-ui,sans-serif">VIGIL</text>
+  <text x="120" y="42" fill="#6b7280" font-size="12" font-family="system-ui,sans-serif">Trust Score</text>
+
+  <!-- Grade circle -->
+  <circle cx="520" cy="90" r="50" fill="${gc}18" stroke="${gc}" stroke-width="2"/>
+  <text x="520" y="102" fill="${gc}" font-size="48" font-weight="800" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustGrade}</text>
+  <text x="520" y="155" fill="#fff" font-size="20" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">${report.trustScore}/100</text>
+  <text x="520" y="172" fill="#6b7280" font-size="11" text-anchor="middle" text-transform="uppercase" font-family="system-ui,sans-serif">${report.trustTier}</text>
+
+  <!-- Trader info -->
+  <text x="40" y="85" fill="#fff" font-size="22" font-weight="700" font-family="system-ui,sans-serif">${hEsc(name)}</text>
+  <text x="40" y="108" fill="#6b7280" font-size="11" font-family="monospace">${wallet.slice(0, 10)}...${wallet.slice(-4)}</text>
+
+  <!-- Key metrics row -->
+  <text x="40" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">PnL</text>
+  <text x="40" y="165" fill="${pnlColor}" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${pnlStr}</text>
+
+  <text x="170" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Resolved</text>
+  <text x="170" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.resolvedBets}</text>
+
+  <text x="280" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Win Rate</text>
+  <text x="280" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${(report.raw.winRate * 100).toFixed(0)}%</text>
+
+  <text x="370" y="145" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Markets</text>
+  <text x="370" y="165" fill="#fff" font-size="18" font-weight="700" font-family="system-ui,sans-serif">${report.raw.uniqueMarkets}</text>
+
+  <!-- Divider -->
+  <line x1="40" y1="190" x2="560" y2="190" stroke="#1f2937" stroke-width="1"/>
+
+  <!-- Dimension bars -->
+  <text x="40" y="210" fill="#6b7280" font-size="10" text-transform="uppercase" letter-spacing="1" font-family="system-ui,sans-serif">Scoring Dimensions</text>
+  ${dimBars}
+
+  <!-- Flags -->
+  ${topFlags}
+  ${topGreens}
+
+  <!-- Footer -->
+  <text x="40" y="305" fill="#374151" font-size="10" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com \u2022 Informational only</text>
+</svg>`;
+
+    res.set('Content-Type', 'image/svg+xml');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(svg);
+  } catch (err) {
+    res.status(500).send('OG generation failed');
+  }
 });
 
 // ============================================================
@@ -1880,6 +2051,14 @@ function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VIGIL x ${pmEscape(r.displayName)} - Polymarket Trust Score</title>
+<meta property="og:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
+<meta property="og:description" content="Trust Score ${r.trustScore}/100 | ${r.trustTier} | ${r.raw.resolvedBets} resolved bets | PnL: ${r.raw.totalPnl >= 0 ? '+' : '-'}$${Math.round(Math.abs(r.raw.totalPnl)).toLocaleString()}">
+<meta property="og:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
+<meta name="twitter:description" content="${r.trustTier} | ${r.raw.resolvedBets} resolved bets">
+<meta name="twitter:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e1a;color:#d1d5db;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
 .hdr{font-size:14px;color:#6b7280;margin-bottom:24px}.hdr b{color:#a78bfa}
@@ -2221,6 +2400,13 @@ const TOP_WALLETS = [
   { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 1345784, grade: 'D', score: 48, resolved: 942, calibration: 84 },
 ];
 
+// Seed username cache from leaderboard on startup
+for (const w of TOP_WALLETS) {
+  if (w.name && !w.name.startsWith('0x')) {
+    usernameToWallet.set(w.name.toLowerCase(), w.wallet);
+  }
+}
+
 function renderHomepage(): string {
   // Build leaderboard rows
   const leaderboardRows = TOP_WALLETS.map((w, i) => {
@@ -2309,6 +2495,21 @@ a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
 .foot{text-align:center;padding:32px 0;border-top:1px solid #1f2937;font-size:12px;color:#4b5563}
 table tr:hover td{background:#1f293744}
 table td{padding:10px 6px;border-bottom:1px solid #1f293744;transition:background .15s}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #ffffff40;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+@media(max-width:640px){
+  .wrap{padding:12px}
+  table{font-size:12px}
+  table th,table td{padding:6px 4px}
+  .hero-title{font-size:28px!important}
+  .hero-sub{font-size:14px!important}
+  .cards{flex-direction:column}
+  .card{min-width:auto!important}
+  form{flex-direction:column}
+  form select,form input,form button{width:100%;border-radius:8px!important}
+  .sec-title{font-size:11px}
+  .endpoint{flex-direction:column;gap:4px}
+}
 </style>
 <script>
 function doSearch(e) {
@@ -2316,8 +2517,13 @@ function doSearch(e) {
   var q = document.getElementById('q').value.trim();
   var v = document.getElementById('vertical').value;
   if (!q) return;
+  // Show loading state
+  var btn = e.target.querySelector('button');
+  btn.innerHTML = '<span class="spinner"></span> Scoring...';
+  btn.disabled = true;
   if (v === 'polymarket') {
-    window.location.href = '/polymarket/' + encodeURIComponent(q);
+    if (q.startsWith('0x')) window.location.href = '/polymarket/' + encodeURIComponent(q);
+    else window.location.href = '/polymarket/search?q=' + encodeURIComponent(q);
   } else if (v === 'degenclaw') {
     window.location.href = '/degenclaw/' + encodeURIComponent(q);
   } else if (v === 'onchain') {
@@ -2349,7 +2555,7 @@ function doSearch(e) {
       <option value="degenclaw">DegenClaw Agent</option>
       <option value="onchain">On-Chain Lookup</option>
     </select>
-    <input type="text" id="q" placeholder="Enter wallet address (0x...) or agent name" autocomplete="off" />
+    <input type="text" id="q" placeholder="Wallet address (0x...) or username (e.g. swisstony)" autocomplete="off" />
     <button type="submit">Score</button>
   </form>
 </div>

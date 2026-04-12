@@ -268,8 +268,8 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
     tradesByMarket.set(t.conditionId, existing);
   }
 
-  // Look up resolution for each market (cap at 100 to avoid rate limits)
-  const conditionIds = [...tradesByMarket.keys()].slice(0, 100);
+  // Look up resolution for each market (cap at 250 for depth vs rate limits)
+  const conditionIds = [...tradesByMarket.keys()].slice(0, 250);
   const resolutions = await Promise.allSettled(
     conditionIds.map(id => fetchMarketResolution(id))
   );
@@ -283,45 +283,60 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
     const market = res.value;
     const marketTrades = tradesByMarket.get(conditionIds[i])!;
 
-    // Aggregate the trader's net position in this market
-    // BUY YES at price X = betting YES with implied prob X
-    // BUY NO at price X = betting NO with implied prob X
-    // We need the weighted average entry price and which side they're on
-    let yesShares = 0;
-    let noShares = 0;
-    let yesCost = 0;
-    let noCost = 0;
+    // Track BUY and SELL separately per side (Yes/No)
+    // BUY = opening/adding to position, SELL = closing/reducing position
+    let yesBought = 0;   // total YES shares bought
+    let yesSold = 0;      // total YES shares sold
+    let yesBuyCost = 0;   // total USDC spent buying YES
+    let noBought = 0;
+    let noSold = 0;
+    let noBuyCost = 0;
 
     for (const t of marketTrades) {
       const shares = t.size || 0;
       const cost = t.usdcSize || (shares * t.price);
       if (t.side === 'BUY') {
-        if (t.outcome === 'Yes') { yesShares += shares; yesCost += cost; }
-        else { noShares += shares; noCost += cost; }
+        if (t.outcome === 'Yes') { yesBought += shares; yesBuyCost += cost; }
+        else { noBought += shares; noBuyCost += cost; }
       } else {
-        // SELL reduces position
-        if (t.outcome === 'Yes') { yesShares -= shares; yesCost -= cost; }
-        else { noShares -= shares; noCost -= cost; }
+        if (t.outcome === 'Yes') { yesSold += shares; }
+        else { noSold += shares; }
       }
     }
 
-    // Determine net position
-    const netYes = yesShares > noShares;
-    const netShares = netYes ? yesShares : noShares;
-    const netCost = netYes ? yesCost : noCost;
-    if (netShares <= 0) continue; // fully exited position
+    // Net shares still held at resolution
+    const yesNet = yesBought - yesSold;
+    const noNet = noBought - noSold;
 
-    const avgPrice = netCost > 0 && netShares > 0 ? netCost / netShares : 0.5;
-    const impliedProb = Math.max(0.01, Math.min(0.99, avgPrice));
+    // Skip if trader fully exited BOTH sides before resolution
+    // They traded but didn't hold through — no calibration signal
+    if (yesNet <= 0.01 && noNet <= 0.01) continue;
 
-    // Did they win?
-    const traderSide = netYes ? 'Yes' : 'No';
+    // Determine which side they held
+    // If they held both (hedged), use the larger side
+    let traderSide: 'Yes' | 'No';
+    let netShares: number;
+    let avgEntryPrice: number;
+
+    if (yesNet > noNet) {
+      traderSide = 'Yes';
+      netShares = yesNet;
+      // Average entry price = total buy cost / total bought (not net)
+      // This represents their average conviction level
+      avgEntryPrice = yesBought > 0 ? yesBuyCost / yesBought : 0.5;
+    } else {
+      traderSide = 'No';
+      netShares = noNet;
+      avgEntryPrice = noBought > 0 ? noBuyCost / noBought : 0.5;
+    }
+
+    const impliedProb = Math.max(0.01, Math.min(0.99, avgEntryPrice));
     const correct = market.winningOutcome === traderSide;
 
-    // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice per share
+    // PnL: if correct, gained (1 - avgPrice) per share; if wrong, lost avgPrice
     const pnl = correct
-      ? netShares * (1 - avgPrice)
-      : -netShares * avgPrice;
+      ? netShares * (1 - avgEntryPrice)
+      : -netShares * avgEntryPrice;
 
     resolvedBets.push({
       impliedProb,
