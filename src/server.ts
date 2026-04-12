@@ -2224,9 +2224,11 @@ app.get('/polymarket/leaderboard', (_req, res) => {
       const pnl = e.realizedPnl >= 0
         ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
         : `<span style="color:#ef4444">-$${Math.round(Math.abs(e.realizedPnl)).toLocaleString()}</span>`;
-      const bss = e.brierSkillScore >= 0
-        ? `<span style="color:#10b981">+${(e.brierSkillScore * 100).toFixed(0)}%</span>`
-        : `<span style="color:#ef4444">${(e.brierSkillScore * 100).toFixed(0)}%</span>`;
+      const bssRaw = e.brierSkillScore * 100;
+      const bssCapped = Math.max(-999, Math.min(999, bssRaw));
+      const bss = bssRaw >= 0
+        ? `<span style="color:#10b981">+${bssCapped.toFixed(0)}%</span>`
+        : `<span style="color:#ef4444">${bssCapped.toFixed(0)}%</span>`;
       const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
       const rowBg = i % 2 === 0 ? '' : 'background:#0d101666;';
       return `<tr style="border-bottom:1px solid #1f2937;${rowBg}transition:background .15s" onmouseover="this.style.background='#1f293766'" onmouseout="this.style.background='${i % 2 === 0 ? '' : '#0d101666'}'">
@@ -2448,7 +2450,7 @@ ${dims.map(d => `<div class="dim"><div class="dim-label">${d.label}</div><div cl
 <div class="metric"><div class="metric-label">Markets</div><div class="metric-val">${r.raw.uniqueMarkets}</div></div>
 <div class="metric"><div class="metric-label">Brier Score</div><div class="metric-val">${r.calibrationReport.brierScore}</div></div>
 <div class="metric"><div class="metric-label">Open Positions</div><div class="metric-val">${r.raw.openPositions}</div></div>
-<div class="metric"><div class="metric-label">Brier Skill</div><div class="metric-val" style="color:${r.calibrationReport.brierSkillScore > 0 ? '#10b981' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div></div>
+<div class="metric"><div class="metric-label">Brier Skill</div><div class="metric-val" style="color:${r.calibrationReport.brierSkillScore > 0 ? '#10b981' : '#ef4444'}">${Math.max(-999, Math.min(999, r.calibrationReport.brierSkillScore * 100)).toFixed(1)}%</div></div>
 <div class="metric"><div class="metric-label">Log Loss</div><div class="metric-val">${r.calibrationReport.logLoss.toFixed(3)}</div></div>
 </div></div>
 
@@ -2470,7 +2472,7 @@ ${r.calibrationReport.buckets.length > 0 ? `<div class="card"><div class="sec-ti
 </div>
 <div style="background:#0d1117;padding:12px;border-radius:8px;border:1px solid #1f2937">
 <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Brier Skill Score</div>
-<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${(r.calibrationReport.brierSkillScore * 100).toFixed(1)}%</div>
+<div style="font-size:18px;font-weight:700;color:${r.calibrationReport.brierSkillScore > 0.1 ? '#10b981' : r.calibrationReport.brierSkillScore > 0 ? '#eab308' : '#ef4444'}">${Math.max(-999, Math.min(999, r.calibrationReport.brierSkillScore * 100)).toFixed(1)}%</div>
 <div style="font-size:10px;color:#4b5563">vs naive baseline</div>
 </div>
 </div>
@@ -2489,11 +2491,17 @@ ${r.calibrationReport.timeliness.timelinessScore > 0 ? `<div style="background:#
 </div>
 </div>` : ''}
 
-${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill vs. Luck Decomposition</div>
-<p style="font-size:13px;color:#9ca3af;margin-bottom:12px">How much of returns came from genuine predictive skill vs. variance?</p>
-<div class="skill-bar">
-<div class="skill-seg" style="flex:${r.calibrationReport.skillDecomposition.skill};background:#10b981">Skill ${r.calibrationReport.skillDecomposition.skill.toFixed(0)}%</div>
-<div class="skill-seg" style="flex:${Math.max(r.calibrationReport.skillDecomposition.luck, 1)};background:#6366f1">Luck ${r.calibrationReport.skillDecomposition.luck.toFixed(0)}%</div>
+${r.calibrationReport.skillDecomposition.skill > 0 ? `<div class="card"><div class="sec-title">Skill &amp; Variance Analysis</div>
+<p style="font-size:13px;color:#9ca3af;margin-bottom:12px">Skill measures calibration quality (0-100). Variance measures return volatility (0-100, higher = more volatile).</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div style="text-align:center;padding:16px;background:#0f1218;border-radius:8px;border:1px solid #1f2937">
+  <div style="font-size:32px;font-weight:800;color:#10b981">${r.calibrationReport.skillDecomposition.skill.toFixed(0)}</div>
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Skill Score</div>
+</div>
+<div style="text-align:center;padding:16px;background:#0f1218;border-radius:8px;border:1px solid #1f2937">
+  <div style="font-size:32px;font-weight:800;color:#6366f1">${r.calibrationReport.skillDecomposition.luck.toFixed(0)}</div>
+  <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-top:4px">Variance</div>
+</div>
 </div></div>` : ''}
 
 <div class="card"><div class="sec-title">Signals</div>${greenFlagsHtml}${flagsHtml}</div>

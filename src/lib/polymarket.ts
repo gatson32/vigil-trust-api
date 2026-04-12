@@ -1118,7 +1118,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     calibrationReport.resolvedBets >= 10
       ? `Calibration error: ${(calibrationReport.calibrationError * 100).toFixed(1)}% — ${calibrationReport.calibrationError < 0.1 ? 'excellent' : calibrationReport.calibrationError < 0.2 ? 'good' : 'needs improvement'}.`
       : `Insufficient resolved bets for calibration analysis.`,
-    `Skill decomposition: ${calibrationReport.skillDecomposition.skill.toFixed(0)}% skill, ${calibrationReport.skillDecomposition.luck.toFixed(0)}% luck.`,
+    `Skill: ${calibrationReport.skillDecomposition.skill.toFixed(0)}/100 (calibration quality). Variance: ${calibrationReport.skillDecomposition.luck.toFixed(0)}/100 (higher = more volatile returns).`,
   );
   // v1.16.0: Academic-grade metrics in reasoning
   if (calibrationReport.resolvedBets >= 10) {
@@ -1154,13 +1154,20 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
 
   const confidenceDescription = `${trustGrade}/${gatedScore} ± ${confidenceMargin} (${confidenceLevel} confidence, ${resolvedBets.length} resolved bets)`;
 
-  // Identity
-  const firstName = trades[0]?.name || trades[0]?.pseudonym || '';
+  // Identity — clean up Polymarket's raw name field
+  // Polymarket sometimes returns names as "0xADBA...b0Af-1775745654746" (address-timestamp)
+  // Detect and replace with cleaner format
+  let rawName = trades[0]?.name || trades[0]?.pseudonym || '';
   const pseudonym = trades[0]?.pseudonym || '';
+
+  // If name looks like an address (starts with 0x and is very long), use pseudonym or truncated address
+  if (rawName.match(/^0x[a-fA-F0-9]{10,}-\d+$/) || rawName.match(/^0x[a-fA-F0-9]{30,}$/)) {
+    rawName = pseudonym || '';
+  }
 
   return {
     wallet,
-    displayName: firstName || `Trader ${wallet.slice(0, 8)}...`,
+    displayName: rawName || pseudonym || `Trader ${wallet.slice(0, 8)}...`,
     pseudonym,
     raw: {
       totalTrades: trades.length,
