@@ -35,6 +35,10 @@ import {
 import {
   scorePolymarketTrader,
   type PolymarketRiskReport,
+  runDiscoveryCrawl,
+  getSkillLeaderboard,
+  getCrawlerStatus,
+  type LeaderboardEntry,
 } from './lib/polymarket.js';
 import {
   getWalletProvenance,
@@ -1816,7 +1820,7 @@ app.get('/degenclaw', async (_req, res) => {
 // JSON API: score a Polymarket trader by wallet
 // IMPORTANT: Guard against reserved sub-route names that would be caught by :wallet
 app.get('/v1/polymarket/:wallet', async (req, res, next) => {
-  const reserved = ['compare', 'search', 'recent'];
+  const reserved = ['compare', 'search', 'recent', 'discover', 'leaderboard'];
   if (reserved.includes(req.params.wallet)) return next();
   try {
     const wallet = String(req.params.wallet || '').trim();
@@ -1888,7 +1892,7 @@ app.get('/v1/polymarket/search', (req, res) => {
 
 // HTML score card for a Polymarket trader
 app.get('/polymarket/:wallet', async (req, res, next) => {
-  if (['compare', 'search'].includes(req.params.wallet)) return next();
+  if (['compare', 'search', 'leaderboard'].includes(req.params.wallet)) return next();
   let wallet = String(req.params.wallet || '').trim();
 
   // If not a wallet address, try username resolution
@@ -2124,6 +2128,146 @@ app.get('/polymarket/compare', async (req, res) => {
   } catch (err) {
     res.status(500).type('html').send(`<html><body style="background:#0a0a0a;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
   }
+});
+
+// ============================================================
+//  WALLET DISCOVERY & SKILL LEADERBOARD (v1.18.0)
+//  Crawl resolved markets, discover skilled wallets, surface A/B grades
+// ============================================================
+
+// JSON: Skill-based leaderboard — top wallets ranked by actual forecasting ability
+app.get('/v1/polymarket/leaderboard/skill', (_req, res) => {
+  const leaderboard = getSkillLeaderboard();
+  const status = getCrawlerStatus();
+
+  if (leaderboard.length === 0) {
+    return res.json({
+      status: 'empty',
+      message: status.lastCrawl
+        ? 'Leaderboard was built but no qualified wallets found yet. Try again later.'
+        : 'Leaderboard not yet built. Trigger a crawl via POST /v1/polymarket/discover/crawl or wait for the next scheduled run.',
+      crawlerStatus: status,
+      entries: [],
+    });
+  }
+
+  // Grade distribution
+  const grades: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+  for (const e of leaderboard) grades[e.trustGrade] = (grades[e.trustGrade] || 0) + 1;
+
+  res.json({
+    status: 'ok',
+    total: leaderboard.length,
+    gradeDistribution: grades,
+    lastCrawl: status.lastCrawl,
+    entries: leaderboard,
+  });
+});
+
+// JSON: Crawler status
+app.get('/v1/polymarket/discover/status', (_req, res) => {
+  res.json(getCrawlerStatus());
+});
+
+// Trigger a discovery crawl (POST to avoid accidental triggers)
+app.post('/v1/polymarket/discover/crawl', async (req, res) => {
+  const status = getCrawlerStatus();
+  if (status.crawlInProgress) {
+    return res.json({ status: 'already_running', ...status });
+  }
+
+  // Parse optional params
+  const maxMarkets = Math.min(Number(req.query.maxMarkets) || 100, 500);
+  const minVolume = Number(req.query.minVolume) || 50000;
+  const maxToScore = Math.min(Number(req.query.maxToScore) || 200, 500);
+
+  // Start crawl in background — return immediately
+  res.json({
+    status: 'started',
+    message: `Crawling up to ${maxMarkets} resolved markets, will score up to ${maxToScore} wallets. Check /v1/polymarket/discover/status for progress.`,
+    params: { maxMarkets, minVolume, maxToScore },
+  });
+
+  // Fire and forget — the crawl updates the in-memory leaderboard
+  runDiscoveryCrawl({ maxMarkets, minVolume, maxToScore }).then(result => {
+    console.log(`[VIGIL] Discovery crawl finished:`, result);
+  }).catch(err => {
+    console.error(`[VIGIL] Discovery crawl failed:`, err);
+  });
+});
+
+// HTML: Skill Leaderboard page
+app.get('/polymarket/leaderboard', (_req, res) => {
+  const leaderboard = getSkillLeaderboard();
+  const status = getCrawlerStatus();
+
+  const gradeColor = (g: string) => {
+    switch (g) {
+      case 'A': return '#10b981';
+      case 'B': return '#3b82f6';
+      case 'C': return '#f59e0b';
+      case 'D': return '#ef4444';
+      default: return '#6b7280';
+    }
+  };
+
+  let rows = '';
+  if (leaderboard.length === 0) {
+    rows = `<tr><td colspan="7" style="text-align:center;padding:40px;color:#6b7280">No data yet. The discovery crawler runs periodically — check back soon.</td></tr>`;
+  } else {
+    rows = leaderboard.slice(0, 100).map((e, i) => {
+      const gc = gradeColor(e.trustGrade);
+      const pnl = e.realizedPnl >= 0
+        ? `<span style="color:#10b981">+$${Math.round(e.realizedPnl).toLocaleString()}</span>`
+        : `<span style="color:#ef4444">-$${Math.round(Math.abs(e.realizedPnl)).toLocaleString()}</span>`;
+      const bss = e.brierSkillScore >= 0
+        ? `<span style="color:#10b981">+${(e.brierSkillScore * 100).toFixed(0)}%</span>`
+        : `<span style="color:#ef4444">${(e.brierSkillScore * 100).toFixed(0)}%</span>`;
+      const name = e.displayName.length > 20 ? e.displayName.slice(0, 18) + '...' : e.displayName;
+      return `<tr style="border-bottom:1px solid #1f2937">
+        <td style="padding:10px 8px;color:#6b7280">${i + 1}</td>
+        <td style="padding:10px 8px"><a href="/polymarket/${e.wallet}" style="color:#60a5fa;text-decoration:none">${pmEscape(name)}</a></td>
+        <td style="padding:10px 8px;text-align:center"><span style="color:${gc};font-weight:700">${e.trustGrade}/${e.trustScore}</span></td>
+        <td style="padding:10px 8px;text-align:center">${bss}</td>
+        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${(e.calibrationError * 100).toFixed(1)}%</td>
+        <td style="padding:10px 8px;text-align:center;color:#d1d5db">${e.resolvedBets}</td>
+        <td style="padding:10px 8px;text-align:right">${pnl}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title></head>
+  <body style="background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px">
+    <div style="max-width:900px;margin:0 auto">
+      <div style="text-align:center;margin-bottom:24px">
+        <a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a>
+        <span style="color:#6b7280;font-size:13px;margin-left:12px">Skill Leaderboard</span>
+      </div>
+      <p style="text-align:center;color:#9ca3af;font-size:14px;margin-bottom:24px">
+        Wallets ranked by actual forecasting skill — calibration, Brier Skill Score, and resolution — not PnL.
+        ${status.lastCrawl ? `<br><span style="color:#374151;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead>
+          <tr style="border-bottom:2px solid #1f2937;color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:1px">
+            <th style="padding:8px;text-align:left">#</th>
+            <th style="padding:8px;text-align:left">Trader</th>
+            <th style="padding:8px;text-align:center">Grade</th>
+            <th style="padding:8px;text-align:center">BSS</th>
+            <th style="padding:8px;text-align:center">Cal Error</th>
+            <th style="padding:8px;text-align:center">Resolved</th>
+            <th style="padding:8px;text-align:right">PnL</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="text-align:center;margin-top:24px;color:#374151;font-size:11px">
+        VIGIL Trust Score is informational only — not investment advice.<br>
+        <a href="/methodology" style="color:#4b5563;text-decoration:none">Methodology</a> ·
+        <a href="/v1/polymarket/leaderboard/skill" style="color:#4b5563;text-decoration:none">JSON API</a>
+      </div>
+    </div>
+  </body></html>`);
 });
 
 // ============================================================
@@ -2867,6 +3011,24 @@ async function start() {
     setTimeout(() => runPrescoringCron(), 30000);
     setInterval(() => runPrescoringCron(), 3600000);
     console.log('[BOOT] Prescore cron scheduled: 30s initial delay, then hourly');
+
+    // Schedule discovery crawler: 2 min after boot, then every 6 hours
+    // Scans resolved markets, discovers wallets, builds skill leaderboard
+    setTimeout(() => {
+      runDiscoveryCrawl({ maxMarkets: 50, maxToScore: 100 }).then(r => {
+        console.log(`[BOOT] Initial discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
+      }).catch(err => {
+        console.error('[BOOT] Initial discovery crawl failed:', err);
+      });
+    }, 120000); // 2 min delay — let prescore finish first
+    setInterval(() => {
+      runDiscoveryCrawl({ maxMarkets: 100, maxToScore: 200 }).then(r => {
+        console.log(`[CRON] Discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
+      }).catch(err => {
+        console.error('[CRON] Discovery crawl failed:', err);
+      });
+    }, 6 * 3600000); // every 6 hours
+    console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 6h');
   });
 
   // Start ACP evaluator listener in the background (optional, non-fatal)
@@ -3114,6 +3276,7 @@ function doSubscribe(e) {
   <div class="nav-links">
     <a href="/polymarket">Polymarket</a>
     <a href="/polymarket/compare">Compare</a>
+    <a href="/polymarket/leaderboard">Skill Leaderboard</a>
     <a href="/api/pricing">API Pricing</a>
     <a href="/v1">Docs</a>
   </div>
@@ -3238,6 +3401,9 @@ ${recentRows.length > 0 ? `<div class="card">
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/:wallet</span></div><span class="desc">Trust score + calibration for any Polymarket trader</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/:wallet</span></div><span class="desc">Visual HTML scorecard</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/compare</span></div><span class="desc">Compare two wallets head-to-head</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/polymarket/leaderboard</span></div><span class="desc">Skill leaderboard — top wallets by forecasting ability</span></div>
+  <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/polymarket/leaderboard/skill</span></div><span class="desc">JSON: Skill-ranked leaderboard</span></div>
+  <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/polymarket/discover/crawl</span></div><span class="desc">Trigger wallet discovery crawl</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/v1/onchain/:wallet</span></div><span class="desc">On-chain wallet provenance (Base + Polygon)</span></div>
   <div class="endpoint"><div><span class="method">GET</span><span class="path">/api/pricing</span></div><span class="desc">API pricing and rate limits</span></div>
   <div class="endpoint"><div><span class="method">POST</span><span class="path">/v1/api/keys/create</span></div><span class="desc">Create API key for programmatic access</span></div>

@@ -8,7 +8,7 @@
 
 import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
 
-const USER_AGENT = 'VIGIL-Trust/1.17.0 (vigil.trust; prediction-market-scoring)';
+const USER_AGENT = 'VIGIL-Trust/1.18.0 (vigil.trust; prediction-market-scoring)';
 const DATA_BASE = 'https://data-api.polymarket.com';
 
 // ============================================================
@@ -1196,4 +1196,277 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     dataSource: 'polymarket-v1',
     disclaimer: 'VIGIL Trust Score is informational only — not investment advice. Calibration scoring requires resolved markets and may not reflect recent performance.',
   };
+}
+
+
+// ============================================================
+//  WALLET DISCOVERY CRAWLER — Find skilled traders across all
+//  resolved Polymarket markets. Scans high-volume resolved markets,
+//  collects unique wallet addresses, and identifies A/B grade wallets.
+// ============================================================
+
+const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+
+/** Summary of a discovered wallet before full scoring */
+export interface DiscoveredWallet {
+  wallet: string;
+  marketsTraded: number;    // how many resolved markets we saw them in
+  firstSeen: string;        // ISO date of first discovery
+}
+
+/** A scored wallet in the skill leaderboard */
+export interface LeaderboardEntry {
+  wallet: string;
+  displayName: string;
+  trustScore: number;
+  trustGrade: string;
+  brierSkillScore: number;
+  calibrationError: number;
+  resolvedBets: number;
+  winRate: number;
+  realizedPnl: number;
+  scoredAt: string;
+}
+
+// In-memory leaderboard store (persists across requests, rebuilt by cron)
+let skillLeaderboard: LeaderboardEntry[] = [];
+let discoveredWallets: Map<string, DiscoveredWallet> = new Map();
+let lastCrawlTime: string | null = null;
+let crawlInProgress = false;
+
+/** Get current skill leaderboard */
+export function getSkillLeaderboard(): LeaderboardEntry[] {
+  return skillLeaderboard;
+}
+
+/** Get crawler status */
+export function getCrawlerStatus() {
+  return {
+    discoveredWallets: discoveredWallets.size,
+    leaderboardSize: skillLeaderboard.length,
+    lastCrawl: lastCrawlTime,
+    crawlInProgress,
+  };
+}
+
+/**
+ * Phase 1: Crawl resolved markets from Gamma API and collect unique wallet addresses.
+ * Scans the top N resolved markets by volume, pulls trades from each, deduplicates wallets.
+ *
+ * @param maxMarkets - how many resolved markets to scan (default 100)
+ * @param minVolume - minimum market volume to consider (filters noise)
+ */
+export async function crawlResolvedMarkets(
+  maxMarkets = 100,
+  minVolume = 50000,
+): Promise<Map<string, DiscoveredWallet>> {
+  console.log(`[VIGIL Crawler] Starting crawl — scanning up to ${maxMarkets} resolved markets...`);
+
+  // Fetch resolved markets ordered by volume (biggest = most traders)
+  const markets: any[] = [];
+  let offset = 0;
+  const limit = 50; // Gamma API page size
+
+  while (markets.length < maxMarkets) {
+    try {
+      const batch = await fetchJson<any[]>(
+        `${GAMMA_BASE}/markets?closed=true&limit=${limit}&offset=${offset}&order=volumeNum&ascending=false`,
+        15000,
+      );
+      if (!Array.isArray(batch) || batch.length === 0) break;
+
+      // Filter by minimum volume
+      const filtered = batch.filter((m: any) => (m.volumeNum || 0) >= minVolume);
+      markets.push(...filtered);
+
+      if (batch.length < limit) break; // last page
+      offset += limit;
+    } catch (err) {
+      console.error(`[VIGIL Crawler] Error fetching markets at offset ${offset}:`, err);
+      break;
+    }
+  }
+
+  const resolvedMarkets = markets.slice(0, maxMarkets);
+  console.log(`[VIGIL Crawler] Found ${resolvedMarkets.length} resolved markets above $${minVolume.toLocaleString()} volume`);
+
+  // For each market, fetch trades and collect unique wallets
+  const wallets = new Map<string, DiscoveredWallet>(discoveredWallets);
+  let marketsScanned = 0;
+
+  for (const market of resolvedMarkets) {
+    try {
+      const conditionId = market.conditionId;
+      if (!conditionId) continue;
+
+      // Fetch up to 500 trades per market to get diverse wallet set
+      const trades = await fetchJson<any[]>(
+        `${DATA_BASE}/trades?conditionId=${conditionId}&limit=500`,
+        10000,
+      );
+
+      if (!Array.isArray(trades)) continue;
+
+      for (const trade of trades) {
+        const w = trade.proxyWallet;
+        if (!w) continue;
+
+        if (wallets.has(w)) {
+          const existing = wallets.get(w)!;
+          existing.marketsTraded++;
+        } else {
+          wallets.set(w, {
+            wallet: w,
+            marketsTraded: 1,
+            firstSeen: new Date().toISOString(),
+          });
+        }
+      }
+
+      marketsScanned++;
+
+      // Rate limit: small delay every 10 markets to be kind to the API
+      if (marketsScanned % 10 === 0) {
+        console.log(`[VIGIL Crawler] Scanned ${marketsScanned}/${resolvedMarkets.length} markets, ${wallets.size} unique wallets found`);
+        await new Promise(r => setTimeout(r, 500));
+      }
+    } catch (err) {
+      console.error(`[VIGIL Crawler] Error scanning market ${market.id}:`, err);
+      continue;
+    }
+  }
+
+  console.log(`[VIGIL Crawler] Crawl complete: ${marketsScanned} markets → ${wallets.size} unique wallets`);
+  discoveredWallets = wallets;
+  return wallets;
+}
+
+/**
+ * Phase 2: Score discovered wallets and build the skill leaderboard.
+ * Only scores wallets seen in 3+ resolved markets (likely to have enough data).
+ * Filters for positive BSS and decent calibration to surface genuinely skilled traders.
+ *
+ * @param maxToScore - how many wallets to attempt scoring (default 200)
+ * @param minMarketsTraded - minimum resolved markets a wallet must appear in (default 3)
+ */
+export async function buildSkillLeaderboard(
+  maxToScore = 200,
+  minMarketsTraded = 3,
+): Promise<LeaderboardEntry[]> {
+  console.log(`[VIGIL Crawler] Building skill leaderboard from ${discoveredWallets.size} discovered wallets...`);
+
+  // Sort by marketsTraded descending — wallets in more markets likely have more resolved data
+  const candidates = [...discoveredWallets.values()]
+    .filter(w => w.marketsTraded >= minMarketsTraded)
+    .sort((a, b) => b.marketsTraded - a.marketsTraded)
+    .slice(0, maxToScore);
+
+  console.log(`[VIGIL Crawler] ${candidates.length} candidates with ${minMarketsTraded}+ markets traded`);
+
+  const entries: LeaderboardEntry[] = [];
+  let scored = 0;
+  let errors = 0;
+
+  for (const candidate of candidates) {
+    try {
+      const report = await scorePolymarketTrader(candidate.wallet);
+      if (!report) { scored++; errors++; continue; }
+
+      // Only include wallets with meaningful data
+      if (report.raw.resolvedBets < 10) {
+        scored++;
+        continue;
+      }
+
+      entries.push({
+        wallet: report.wallet,
+        displayName: report.displayName,
+        trustScore: report.trustScore,
+        trustGrade: report.trustGrade,
+        brierSkillScore: report.calibrationReport.brierSkillScore,
+        calibrationError: report.calibrationReport.calibrationError,
+        resolvedBets: report.raw.resolvedBets,
+        winRate: report.raw.winRate,
+        realizedPnl: report.raw.realizedPnl,
+        scoredAt: report.scoredAt,
+      });
+
+      scored++;
+
+      // Log progress every 25 wallets
+      if (scored % 25 === 0) {
+        console.log(`[VIGIL Crawler] Scored ${scored}/${candidates.length} wallets, ${entries.length} qualified so far`);
+      }
+
+      // Rate limit — avoid hammering APIs
+      if (scored % 5 === 0) {
+        await new Promise(r => setTimeout(r, 300));
+      }
+    } catch (err) {
+      errors++;
+      scored++;
+      continue;
+    }
+  }
+
+  // Sort by trustScore descending — best wallets first
+  entries.sort((a, b) => b.trustScore - a.trustScore);
+
+  skillLeaderboard = entries;
+  lastCrawlTime = new Date().toISOString();
+  console.log(`[VIGIL Crawler] Leaderboard built: ${entries.length} qualified wallets (${errors} errors)`);
+
+  // Log the top performers
+  const topGrades = entries.slice(0, 10).map(e => `${e.displayName}: ${e.trustGrade}/${e.trustScore}`);
+  if (topGrades.length > 0) {
+    console.log(`[VIGIL Crawler] Top 10: ${topGrades.join(', ')}`);
+  }
+
+  // Log grade distribution
+  const gradeCounts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+  for (const e of entries) gradeCounts[e.trustGrade] = (gradeCounts[e.trustGrade] || 0) + 1;
+  console.log(`[VIGIL Crawler] Grade distribution: A=${gradeCounts.A} B=${gradeCounts.B} C=${gradeCounts.C} D=${gradeCounts.D} F=${gradeCounts.F}`);
+
+  return entries;
+}
+
+/**
+ * Full crawl pipeline: discover wallets → score → build leaderboard.
+ * Designed to run as a background job (cron or manual trigger).
+ */
+export async function runDiscoveryCrawl(
+  options: {
+    maxMarkets?: number;
+    minVolume?: number;
+    maxToScore?: number;
+    minMarketsTraded?: number;
+  } = {},
+): Promise<{ status: string; discovered: number; scored: number; topGrade: string | null }> {
+  if (crawlInProgress) {
+    return { status: 'already_running', discovered: discoveredWallets.size, scored: skillLeaderboard.length, topGrade: null };
+  }
+
+  crawlInProgress = true;
+  try {
+    const {
+      maxMarkets = 100,
+      minVolume = 50000,
+      maxToScore = 200,
+      minMarketsTraded = 3,
+    } = options;
+
+    await crawlResolvedMarkets(maxMarkets, minVolume);
+    const entries = await buildSkillLeaderboard(maxToScore, minMarketsTraded);
+
+    const topGrade = entries.length > 0 ? `${entries[0].trustGrade}/${entries[0].trustScore}` : null;
+
+    return {
+      status: 'complete',
+      discovered: discoveredWallets.size,
+      scored: entries.length,
+      topGrade,
+    };
+  } finally {
+    crawlInProgress = false;
+  }
 }
