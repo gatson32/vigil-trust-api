@@ -78,9 +78,9 @@ const MAX_RECENT = 50;
 
 // Username → wallet lookup cache. Grows as wallets get scored.
 const usernameToWallet = new Map<string, string>();
-// Persisted discovery alerts (loaded from DB on boot, so homepage links work before crawler runs)
-let knownBGradeWallets: Array<{ wallet: string; displayName: string }> = [];
-let knownAGradeWallets: Array<{ wallet: string; displayName: string }> = [];
+// Persisted discovery alerts (loaded from DB on boot, so homepage elite table works before crawler runs)
+interface KnownEliteWallet { wallet: string; displayName: string; trustGrade: string; trustScore: number; brierSkillScore: number; resolvedBets: number }
+let knownEliteWallets: KnownEliteWallet[] = [];
 
 function addRecentScore(r: PolymarketRiskReport): void {
   // Avoid duplicates — remove existing entry for same wallet
@@ -3049,19 +3049,27 @@ async function start() {
       console.error('[BOOT] Failed to load subscribers:', err);
     }
 
-    // Load discovery alerts so homepage grade links work immediately (before crawler runs)
+    // Load discovery alerts so homepage elite table works immediately (before crawler runs)
     try {
-      const alerts = await query("SELECT wallet, display_name, trust_grade FROM discovery_alerts ORDER BY trust_score DESC");
+      const alerts = await query("SELECT wallet, display_name, trust_grade, trust_score, brier_skill, resolved_bets FROM discovery_alerts WHERE trust_grade IN ('A', 'B') ORDER BY trust_score DESC LIMIT 10");
       if (alerts?.rows) {
-        for (const row of alerts.rows) {
-          if (row.trust_grade === 'B') knownBGradeWallets.push({ wallet: row.wallet, displayName: row.display_name });
-          if (row.trust_grade === 'A') knownAGradeWallets.push({ wallet: row.wallet, displayName: row.display_name });
-          // Seed username cache from alerts too
-          if (row.display_name && !row.display_name.startsWith('0x')) {
-            usernameToWallet.set(row.display_name.toLowerCase(), row.wallet);
+        knownEliteWallets = alerts.rows.map((row: any) => ({
+          wallet: row.wallet,
+          displayName: row.display_name || row.wallet.slice(0, 8) + '...' + row.wallet.slice(-4),
+          trustGrade: row.trust_grade,
+          trustScore: row.trust_score,
+          brierSkillScore: row.brier_skill || 0,
+          resolvedBets: row.resolved_bets || 0,
+        }));
+        // Seed username cache from alerts too
+        for (const w of knownEliteWallets) {
+          if (w.displayName && !w.displayName.startsWith('0x')) {
+            usernameToWallet.set(w.displayName.toLowerCase(), w.wallet);
           }
         }
-        console.log(`[BOOT] Loaded ${knownAGradeWallets.length} A-grade + ${knownBGradeWallets.length} B-grade wallets from discovery_alerts`);
+        const aCount = knownEliteWallets.filter(w => w.trustGrade === 'A').length;
+        const bCount = knownEliteWallets.filter(w => w.trustGrade === 'B').length;
+        console.log(`[BOOT] Loaded ${aCount} A-grade + ${bCount} B-grade wallets from discovery_alerts`);
       }
     } catch (err) {
       console.error('[BOOT] Failed to load discovery alerts:', err);
@@ -3233,10 +3241,19 @@ function renderHomepage(): string {
 
   // Build VIGIL Elite list — only A and B grade wallets
   const fullLeaderboard = getSkillLeaderboard();
-  const eliteWallets = fullLeaderboard.filter(e => e.trustGrade === 'A' || e.trustGrade === 'B').slice(0, 10);
-  // Grade counts: prefer live crawler data, fall back to DB-persisted discovery alerts
-  const aGradeCount = fullLeaderboard.filter(e => e.trustGrade === 'A').length || knownAGradeWallets.length;
-  const bGradeCount = fullLeaderboard.filter(e => e.trustGrade === 'B').length || knownBGradeWallets.length;
+  const liveElite = fullLeaderboard.filter(e => e.trustGrade === 'A' || e.trustGrade === 'B');
+  // Use live crawler data if available, otherwise fall back to DB-persisted discovery alerts
+  const eliteSource = liveElite.length > 0 ? liveElite.map(e => ({
+    wallet: e.wallet, displayName: e.displayName, trustGrade: e.trustGrade,
+    trustScore: e.trustScore, brierSkillScore: e.brierSkillScore, resolvedBets: e.resolvedBets, realizedPnl: e.realizedPnl,
+  })) : knownEliteWallets.map(w => ({ ...w, realizedPnl: 0 }));
+  const eliteWallets = eliteSource.slice(0, 10);
+  const aGradeCount = liveElite.length > 0
+    ? fullLeaderboard.filter(e => e.trustGrade === 'A').length
+    : knownEliteWallets.filter(w => w.trustGrade === 'A').length;
+  const bGradeCount = liveElite.length > 0
+    ? fullLeaderboard.filter(e => e.trustGrade === 'B').length
+    : knownEliteWallets.filter(w => w.trustGrade === 'B').length;
   const skillTop10Rows = eliteWallets.length > 0 ? eliteWallets.map((e, i) => {
     const gc = gradeColor(e.trustGrade);
     const pnl = e.realizedPnl >= 0
