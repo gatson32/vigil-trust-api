@@ -703,12 +703,12 @@ function computeCalibration(bets: ResolvedBet[]): CalibrationReport {
 // ============================================================
 
 const WEIGHTS = {
-  calibration: 0.25,
+  calibration: 0.30,    // bumped: this is the core skill signal
   profitability: 0.15,
   consistency: 0.15,
   discipline: 0.10,
   sampleSize: 0.10,
-  liveEdge: 0.25,       // NEW: unrealized performance on open positions
+  liveEdge: 0.20,       // reduced from 0.25: open positions are noisy signal
 };
 
 function gradeFromScore(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
@@ -825,37 +825,54 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   const wins = resolvedBets.filter(b => b.correct).length;
   const winRate = resolvedBets.length > 0 ? wins / resolvedBets.length : 0;
 
-  // --- DIMENSION 1: CALIBRATION (25%) ---
-  // v1.17.0: Combine calibration error (60%) with resolution (40%)
-  // Resolution rewards wallets that make genuine forecasts diverging from base rate.
-  // A wallet with perfect calibration but no resolution is just predicting the average.
+  // --- DIMENSION 1: CALIBRATION (30%) ---
+  // v1.19.0: BSS-driven calibration scoring (Gneiting & Raftery 2007)
+  // BSS is the gold standard for forecast evaluation — it captures both calibration
+  // quality AND resolution in a single metric. Positive BSS = better than naive baseline.
+  // Old formula used resolution sub-component which was near-zero for all Polymarket wallets.
   let calibrationDim: number;
   if (resolvedBets.length < 5) {
     calibrationDim = 0; // can't assess calibration on thin data
   } else {
+    // Component 1: Calibration error (40%) — how well do probabilities match outcomes?
     // calibrationError ranges 0 (perfect) to ~0.5 (worst)
-    const calScore = Math.max(0, Math.min(100, (1 - calibrationReport.calibrationError * 2.5) * 100));
-    // Resolution ranges 0 (no discrimination) to ~0.25 (strong). Map to 0-100.
-    const resScore = Math.max(0, Math.min(100, calibrationReport.brierDecomposition.resolution * 400));
-    calibrationDim = calScore * 0.6 + resScore * 0.4;
+    const calScore = Math.max(0, Math.min(100, (1 - calibrationReport.calibrationError * 2) * 100));
+
+    // Component 2: Brier Skill Score (60%) — the single best predictor of forecasting skill
+    // BSS ranges from -inf (worse than guessing) to +1 (perfect). Typical range: -2 to +0.5
+    // Map: BSS of -1 = 0, BSS of 0 = 50 (baseline), BSS of +0.5 = 90, BSS of +1 = 100
+    const bss = calibrationReport.brierSkillScore;
+    const bssScore = Math.max(0, Math.min(100, (bss + 1) * 50));
+
+    calibrationDim = calScore * 0.4 + bssScore * 0.6;
   }
 
   // --- DIMENSION 2: PROFITABILITY (15%) ---
+  // v1.19.0: Realistic ROI scaling — Polymarket ROI typically ranges -30% to +20%
+  // Old formula needed +50% ROI to max out (impossible at scale)
   const roi = totalVolume > 0 ? totalPnl / totalVolume : 0;
-  // ROI from -100% to +100% mapped to 0-100
-  const profitabilityDim = Math.max(0, Math.min(100, (roi + 0.5) * 100));
+  // ROI of -20% = 0, ROI of 0% = 40, ROI of +10% = 70, ROI of +30% = 100
+  const profitabilityDim = Math.max(0, Math.min(100, (roi + 0.2) * 200));
 
   // --- DIMENSION 3: CONSISTENCY (15%) ---
-  // How stable are the per-bet returns?
+  // v1.19.0: IQR-based consistency — robust to outliers, doesn't penalize winners
+  // Old formula used CV (stdDev/mean), which punished big winners (high variance = low score)
+  // and rewarded small losers (low variance = high score). Completely backwards.
+  // New: uses interquartile range of per-bet returns. Lower IQR = more consistent.
+  // A profitable trader with steady returns scores high; a lucky one-hit wonder scores low.
   let consistencyDim: number;
   if (resolvedBets.length >= 5) {
-    const betReturns = resolvedBets.map(b => b.pnl / (b.size * b.impliedProb || 1));
-    const mean = betReturns.reduce((s, v) => s + v, 0) / betReturns.length;
-    const variance = betReturns.reduce((s, v) => s + (v - mean) ** 2, 0) / betReturns.length;
-    const cv = mean !== 0 ? Math.sqrt(variance) / Math.abs(mean) : 2;
-    // Lower CV = more consistent. CV of 0 = 100, CV of 3+ = 0
-    // Use cv=2 for break-even traders (mean=0)
-    consistencyDim = Math.max(0, Math.min(100, (1 - cv / 3) * 100));
+    const betReturns = resolvedBets.map(b => b.pnl / (b.size * b.impliedProb || 1)).sort((a, b) => a - b);
+    const q1 = betReturns[Math.floor(betReturns.length * 0.25)];
+    const q3 = betReturns[Math.floor(betReturns.length * 0.75)];
+    const iqr = q3 - q1;
+    // IQR of 0 = perfectly consistent = 100
+    // IQR of 2+ = highly erratic = 0
+    // Bonus: if median return is positive, add up to 15 points
+    const median = betReturns[Math.floor(betReturns.length * 0.5)];
+    const iqrScore = Math.max(0, Math.min(100, (1 - iqr / 2) * 100));
+    const profitBonus = median > 0 ? Math.min(15, median * 30) : 0;
+    consistencyDim = Math.min(100, iqrScore + profitBonus);
   } else {
     consistencyDim = 10; // thin data penalty
   }
@@ -893,11 +910,12 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     sampleSizeDim = Math.min(50, Math.max(5, activityScore * 0.5));
   }
 
-  // --- DIMENSION 6: LIVE EDGE (25%) ---
+  // --- DIMENSION 6: LIVE EDGE (20%) ---
   // How are the trader's OPEN positions performing right now?
   // For each open position: edge = (curPrice - avgPrice) / avgPrice
   // A trader whose open bets have moved in their favor has real live alpha.
-  let liveEdgeDim = 50; // default neutral if no open positions
+  // v1.19.0: Default 40 instead of 50 — no open positions shouldn't be a gift
+  let liveEdgeDim = 40; // default slightly below neutral if no open positions
   if (positions.length >= 3) {
     // Weighted by position size — bigger bets count more
     let totalWeight = 0;
@@ -991,26 +1009,18 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   // Sum penalties (applied after gating to prevent double-punishment)
   const totalPenalty = pennyPenalty + receiveOnlyPenalty + pnlDivPenalty;
 
-  // Sample-size gate — considers resolved bets, open positions, AND trade activity
-  // v1.17.0 FIX: Gates only apply to the RAW score (pre-penalty) to prevent
-  // double-punishment. Penalties are then applied AFTER gating.
+  // v1.19.0: Simplified gating — sample size dimension already penalizes thin data,
+  // so the gate only applies to wallets with almost no data at all. The old system
+  // had 6 tiers of caps that double-punished wallets and compressed all scores into 30-50.
   const totalDataPoints = resolvedBets.length + positions.length;
   const hasProvenActivity = trades.length >= 100 && uniqueMarkets >= 20;
   let gatedRaw: number;
-  if (resolvedBets.length >= 10) {
-    gatedRaw = rawTrustScore; // enough resolved data, no gate
-  } else if (resolvedBets.length >= 5) {
-    gatedRaw = Math.min(rawTrustScore, 65);
-  } else if (hasProvenActivity) {
-    // Few resolved bets but massive trade history — the wallet is real,
-    // positions just got purged from the API. Cap at C+ range.
-    gatedRaw = Math.min(rawTrustScore, 70);
-  } else if (totalDataPoints >= 20) {
-    gatedRaw = Math.min(rawTrustScore, 60);
+  if (resolvedBets.length >= 5 || hasProvenActivity) {
+    gatedRaw = rawTrustScore; // enough data — let the dimensions speak
   } else if (totalDataPoints >= 5) {
-    gatedRaw = Math.min(rawTrustScore, 45);
+    gatedRaw = Math.min(rawTrustScore, 65); // some signal, light cap
   } else {
-    gatedRaw = Math.min(rawTrustScore, 30); // almost no data at all
+    gatedRaw = Math.min(rawTrustScore, 40); // almost no data
   }
 
   // Apply penalties AFTER gating (prevents double-punishment)
