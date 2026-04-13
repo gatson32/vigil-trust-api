@@ -3095,23 +3095,23 @@ async function start() {
     setInterval(() => runPrescoringCron(), 3600000);
     console.log('[BOOT] Prescore cron scheduled: 30s initial delay, then hourly');
 
-    // Schedule discovery crawler: 2 min after boot, then every 6 hours
+    // Schedule discovery crawler: 2 min after boot, then every 2 hours
     // Scans resolved markets, discovers wallets, builds skill leaderboard
     setTimeout(() => {
-      runDiscoveryCrawl({ maxMarkets: 50, maxToScore: 100 }).then(r => {
+      runDiscoveryCrawl({ maxMarkets: 300, maxToScore: 400 }).then(r => {
         console.log(`[BOOT] Initial discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
       }).catch(err => {
         console.error('[BOOT] Initial discovery crawl failed:', err);
       });
     }, 120000); // 2 min delay — let prescore finish first
     setInterval(() => {
-      runDiscoveryCrawl({ maxMarkets: 100, maxToScore: 200 }).then(r => {
+      runDiscoveryCrawl({ maxMarkets: 500, maxToScore: 500 }).then(r => {
         console.log(`[CRON] Discovery crawl complete: ${r.scored} wallets scored, top grade: ${r.topGrade}`);
       }).catch(err => {
         console.error('[CRON] Discovery crawl failed:', err);
       });
-    }, 6 * 3600000); // every 6 hours
-    console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 6h');
+    }, 2 * 3600000); // every 2 hours
+    console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 2h');
   });
 
   // Start ACP evaluator listener in the background (optional, non-fatal)
