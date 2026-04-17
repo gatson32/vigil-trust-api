@@ -2589,7 +2589,7 @@ code{background:#1e1e1e;padding:2px 6px;border-radius:1px;font-size:13px;color:#
 <div class="card"><div class="sec-title">The Proprietary Layer: Calibration Scoring</div>
 <div class="feature"><div><div class="feat-title">Calibration Analysis</div><div class="feat-desc">When a trader buys YES at $0.70, they imply 70% probability. We check: does the event actually happen 70% of the time? This separates genuine skill from speed arb and luck.</div></div></div>
 <div class="feature"><div><div class="feat-title">Skill vs. Luck Decomposition</div><div class="feat-desc">Returns decomposed into Skill (calibration-weighted alpha), Luck (variance residual). Know what you are buying before you copy-trade.</div></div></div>
-<div class="feature"><div><div class="feat-title">Brier Score + 6-Dimension Trust Rating</div><div class="feat-desc">Calibration (25%), Live Edge (25%), Profitability (15%), Consistency (15%), Discipline (10%), Sample Size (10%).</div></div></div>
+<div class="feature"><div><div class="feat-title">Brier Score + 6-Dimension Trust Rating</div><div class="feat-desc">Calibration (25%), Live Edge (20%), Profitability (20%), Consistency (15%), Discipline (10%), Sample Size (10%) + Proven Winner Bonus.</div></div></div>
 </div>
 
 <div class="card"><div class="sec-title">Score Any Trader</div>
