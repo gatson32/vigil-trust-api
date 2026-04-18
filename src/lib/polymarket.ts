@@ -1046,8 +1046,12 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   let gatedScore = Math.max(0, gatedRaw - totalPenalty);
 
   // Hard cap: penny-lottery + receive-only wallets cannot exceed C grade
-  if (pennyRatio >= 0.8 && receiveOnlyPenalty > 0) {
-    gatedScore = Math.min(gatedScore, 49); // cap at D
+  // v1.20.1: Only apply if BSS is negative — if the penny strategy actually beats
+  // the naive baseline, it's working (not farming). influenz.eth has 99% penny bets
+  // and is receive-only BUT has +42.5% BSS and $1M profit — the hard cap was
+  // locking genuinely skilled traders at D/49 regardless of dimension scores.
+  if (pennyRatio >= 0.8 && receiveOnlyPenalty > 0 && !bssPositive) {
+    gatedScore = Math.min(gatedScore, 49); // cap at D — only for unskilled penny bots
   }
 
   const trustGrade = gradeFromScore(gatedScore);
