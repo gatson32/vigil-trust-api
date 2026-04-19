@@ -1903,7 +1903,7 @@ app.get('/degenclaw', async (_req, res) => {
 // JSON API: score a Polymarket trader by wallet
 // IMPORTANT: Guard against reserved sub-route names that would be caught by :wallet
 app.get('/v1/polymarket/:wallet', async (req, res, next) => {
-  const reserved = ['compare', 'search', 'recent', 'discover', 'leaderboard'];
+  const reserved = ['compare', 'search', 'recent', 'discover', 'leaderboard', 'api-docs', 'score'];
   if (reserved.includes(req.params.wallet)) return next();
   try {
     const wallet = String(req.params.wallet || '').trim();
