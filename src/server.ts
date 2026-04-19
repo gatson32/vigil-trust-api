@@ -65,8 +65,9 @@ app.set('trust proxy', 1);
 // ============================================================
 
 const ALLOWED_ORIGINS = [
-  'https://vigiltrust.io',
-  'https://www.vigiltrust.io',
+  'https://vigilscore.xyz',
+  'https://www.vigilscore.xyz',
+  'https://vigil-trust-api.onrender.com',   // legacy — fallback during DNS transition
   'http://localhost:5173',    // Vite dev
   'http://localhost:3000',    // local dev
 ];
@@ -272,6 +273,15 @@ function isUpstreamAvailable(): boolean {
 // ============================================================
 //  MIDDLEWARE
 // ============================================================
+
+// 301 redirect from legacy onrender subdomain → canonical vigilscore.xyz
+// GET-only: leaves webhook POSTs untouched for transition safety
+app.use((req, res, next) => {
+  if (req.hostname === 'vigil-trust-api.onrender.com' && req.method === 'GET') {
+    return res.redirect(301, `https://vigilscore.xyz${req.originalUrl}`);
+  }
+  next();
+});
 
 // CORS — restricted to known origins
 app.use(cors({
@@ -495,7 +505,7 @@ app.get('/robots.txt', (_req, res) => {
     'Disallow: /telegram/',
     'Disallow: /legacy-home',
     '',
-    'Sitemap: https://vigil-trust-api.onrender.com/sitemap.xml',
+    'Sitemap: https://vigilscore.xyz/sitemap.xml',
     '',
   ].join('\n'));
 });
@@ -527,7 +537,7 @@ app.get('/sitemap.xml', (_req, res) => {
   const xml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ...all.map(u => `<url><loc>https://vigil-trust-api.onrender.com${u.loc}</loc><lastmod>${today}</lastmod><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`),
+    ...all.map(u => `<url><loc>https://vigilscore.xyz${u.loc}</loc><lastmod>${today}</lastmod><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`),
     '</urlset>',
   ].join('\n');
   res.type('application/xml').send(xml);
@@ -2165,7 +2175,7 @@ app.get('/v1/polymarket/:wallet/og.svg', async (req, res) => {
 
   <!-- Footer -->
   <rect x="0" y="290" width="600" height="25" fill="#06080e"/>
-  <text x="40" y="306" fill="#333" font-size="9" font-family="system-ui,sans-serif">vigil-trust-api.onrender.com</text>
+  <text x="40" y="306" fill="#333" font-size="9" font-family="system-ui,sans-serif">vigilscore.xyz</text>
   <text x="300" y="306" fill="#333" font-size="9" text-anchor="middle" font-family="system-ui,sans-serif">Not financial advice</text>
   <text x="560" y="306" fill="#333" font-size="9" text-anchor="end" font-family="system-ui,sans-serif">Score any wallet free</text>
 </svg>`;
@@ -2532,12 +2542,12 @@ function renderPolymarketScoreCard(r: PolymarketRiskReport): string {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
 <meta property="og:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
 <meta property="og:description" content="Trust Score ${r.trustScore}/100 | ${r.trustTier} | ${r.raw.resolvedBets} resolved bets | PnL: ${r.raw.totalPnl >= 0 ? '+' : '-'}$${Math.round(Math.abs(r.raw.totalPnl)).toLocaleString()}">
-<meta property="og:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
+<meta property="og:image" content="https://vigilscore.xyz/v1/polymarket/${r.wallet}/og.svg">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="VIGIL: ${pmEscape(r.displayName)} scored ${r.trustGrade}/${r.trustScore}">
 <meta name="twitter:description" content="${r.trustTier} | ${r.raw.resolvedBets} resolved bets">
-<meta name="twitter:image" content="https://vigil-trust-api.onrender.com/v1/polymarket/${r.wallet}/og.svg">
+<meta name="twitter:image" content="https://vigilscore.xyz/v1/polymarket/${r.wallet}/og.svg">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0c0c0c;color:#e8e8e8;line-height:1.6;padding:24px;max-width:800px;margin:0 auto}
 .hdr{font-size:12px;color:#555;margin-bottom:24px;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace}.hdr b{color:#00d4aa}
@@ -2681,7 +2691,7 @@ ${r.trustGrade === 'A' ? 'This trader demonstrates elite forecasting skill. Thei
 <div class="card" style="text-align:center;background:#0f0f0f">
 <div class="sec-title">Share This Score</div>
 <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigil-trust-api.onrender.com/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:transparent;border:1px solid #1d9bf0;color:#1d9bf0;border-radius:2px;font-weight:600;font-size:12px;text-decoration:none;letter-spacing:1px;font-family:'JetBrains Mono',monospace">POST ON X</a>
+<a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`${r.displayName} scored ${r.trustGrade}/${r.trustScore} on VIGIL Trust Score. ${r.trustTier}. ${r.raw.resolvedBets} resolved bets.\n\nScore any Polymarket wallet free:`)}&url=${encodeURIComponent(`https://vigilscore.xyz/polymarket/${r.wallet}`)}" target="_blank" style="display:inline-block;padding:10px 20px;background:transparent;border:1px solid #1d9bf0;color:#1d9bf0;border-radius:2px;font-weight:600;font-size:12px;text-decoration:none;letter-spacing:1px;font-family:'JetBrains Mono',monospace">POST ON X</a>
 <button onclick="navigator.clipboard.writeText(window.location.href).then(function(){this.textContent='COPIED'}.bind(this))" style="padding:10px 20px;background:transparent;border:1px solid #2a2a2a;color:#707070;border-radius:2px;font-weight:600;font-size:12px;cursor:pointer;letter-spacing:1px;font-family:'JetBrains Mono',monospace">COPY LINK</button>
 <a href="/v1/polymarket/${r.wallet}/og.svg" target="_blank" style="display:inline-block;padding:10px 20px;background:transparent;border:1px solid #2a2a2a;color:#707070;border-radius:2px;font-weight:600;font-size:12px;text-decoration:none;letter-spacing:1px;font-family:'JetBrains Mono',monospace">SCORE CARD</a>
 </div>
@@ -2894,7 +2904,7 @@ app.get('/v1/api/pricing', (_req, res) => {
     })),
     currency: 'USD',
     billingCycle: 'monthly',
-    contact: 'api@vigiltrust.io',
+    contact: 'api@vigilscore.xyz',
   });
 });
 
@@ -2917,7 +2927,7 @@ app.get('/api/pricing', (_req, res) => {
       <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:4px">${id.charAt(0).toUpperCase() + id.slice(1)}</h3>
       <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#555;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
       <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#707070;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
-      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1e1e1e;color:#707070;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigiltrust.io?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
+      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1e1e1e;color:#707070;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigilscore.xyz?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
     </div>`;
   }).join('');
 
@@ -2932,7 +2942,7 @@ app.get('/api/pricing', (_req, res) => {
   <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${tierCards}</div>
   <div style="text-align:center;margin-top:40px">
     <p style="color:#444;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
-    <p style="color:#444;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigiltrust.io" style="color:#3b82f6">api@vigiltrust.io</a></p>
+    <p style="color:#444;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigilscore.xyz" style="color:#3b82f6">api@vigilscore.xyz</a></p>
   </div>
 </div></body></html>`);
 });
@@ -2948,7 +2958,7 @@ app.get('/v1/api/keys/create', (req, res) => {
 
   if (tier !== 'free' && tier !== 'starter') {
     return res.json({
-      message: `${tier} tier requires manual setup. Contact api@vigiltrust.io`,
+      message: `${tier} tier requires manual setup. Contact api@vigilscore.xyz`,
       tier,
       pricing: API_TIERS[tier as keyof typeof API_TIERS],
     });
@@ -2963,7 +2973,7 @@ app.get('/v1/api/keys/create', (req, res) => {
   for (const record of apiKeyStore.values()) {
     if (record.owner === email.toLowerCase()) {
       return res.json({
-        message: 'You already have an API key. Contact api@vigiltrust.io if you need a new one.',
+        message: 'You already have an API key. Contact api@vigilscore.xyz if you need a new one.',
         tier: record.tier,
       });
     }
@@ -2990,7 +3000,7 @@ app.get('/v1/api/keys/create', (req, res) => {
     usage: {
       header: 'x-api-key: YOUR_KEY',
       queryParam: '?api_key=YOUR_KEY',
-      example: `curl -H "x-api-key: ${key}" https://vigil-trust-api.onrender.com/v1/polymarket/0x...`,
+      example: `curl -H "x-api-key: ${key}" https://vigilscore.xyz/v1/polymarket/0x...`,
     },
     warning: 'Save this key — it cannot be retrieved later.',
   });
@@ -3061,7 +3071,7 @@ app.post('/telegram/webhook', async (req, res) => {
 
   try {
     if (text.startsWith('/start') || text.startsWith('/help')) {
-      await tgSend(chatId, `<b>VIGIL Trust Score Bot</b>\n\nScore any Polymarket wallet's forecasting skill.\n\n<b>Commands:</b>\n/score &lt;wallet or username&gt;\n/compare &lt;wallet1&gt; &lt;wallet2&gt;\n/top — Leaderboard\n\n<b>Example:</b>\n<code>/score swisstony</code>\n\nPowered by <a href="https://vigil-trust-api.onrender.com">VIGIL</a>`);
+      await tgSend(chatId, `<b>VIGIL Trust Score Bot</b>\n\nScore any Polymarket wallet's forecasting skill.\n\n<b>Commands:</b>\n/score &lt;wallet or username&gt;\n/compare &lt;wallet1&gt; &lt;wallet2&gt;\n/top — Leaderboard\n\n<b>Example:</b>\n<code>/score swisstony</code>\n\nPowered by <a href="https://vigilscore.xyz">VIGIL</a>`);
     } else if (text.startsWith('/score')) {
       const input = text.replace(/^\/score\s*/, '').split(/\s+/)[0];
       if (!input) { await tgSend(chatId, '⚠️ Usage: <code>/score &lt;wallet or username&gt;</code>'); return; }
@@ -3083,7 +3093,7 @@ app.post('/telegram/webhook', async (req, res) => {
       const flags = (d.flags || []).slice(0, 3).map((f: string) => `  ⚠️ ${f}`).join('\n');
       const greens = (d.greenFlags || []).slice(0, 2).map((f: string) => `  ✅ ${f}`).join('\n');
 
-      await tgSend(chatId, `${tgGradeEmoji(d.trustGrade)} <b>VIGIL: ${d.trustGrade} / ${d.trustScore}</b>\n<b>${hEsc(name)}</b> — ${d.trustTier}\n\n📊 Cal: ${d.calibration}/100 | Edge: ${d.liveEdge}/100\nProfit: ${d.profitability}/100 | Consist: ${d.consistency}/100\nDisc: ${d.discipline}/100 | Sample: ${d.sampleSize}/100\n\n💰 PnL: <b>${tgPnl(d.raw.totalPnl)}</b>\n📈 ${d.raw.totalTrades} trades, ${d.raw.resolvedBets} resolved${flags ? '\n\n🚩 ' + flags : ''}${greens ? '\n🟢 ' + greens : ''}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/${d.wallet}">Full Scorecard</a>`);
+      await tgSend(chatId, `${tgGradeEmoji(d.trustGrade)} <b>VIGIL: ${d.trustGrade} / ${d.trustScore}</b>\n<b>${hEsc(name)}</b> — ${d.trustTier}\n\n📊 Cal: ${d.calibration}/100 | Edge: ${d.liveEdge}/100\nProfit: ${d.profitability}/100 | Consist: ${d.consistency}/100\nDisc: ${d.discipline}/100 | Sample: ${d.sampleSize}/100\n\n💰 PnL: <b>${tgPnl(d.raw.totalPnl)}</b>\n📈 ${d.raw.totalTrades} trades, ${d.raw.resolvedBets} resolved${flags ? '\n\n🚩 ' + flags : ''}${greens ? '\n🟢 ' + greens : ''}\n\n🔗 <a href="https://vigilscore.xyz/polymarket/${d.wallet}">Full Scorecard</a>`);
     } else if (text.startsWith('/compare')) {
       const parts = text.replace(/^\/compare\s*/, '').split(/\s+/);
       if (parts.length < 2) { await tgSend(chatId, '⚠️ Usage: <code>/compare &lt;wallet1&gt; &lt;wallet2&gt;</code>'); return; }
@@ -3092,14 +3102,14 @@ app.post('/telegram/webhook', async (req, res) => {
       const [d1, d2] = await Promise.all([scorePolymarketTrader(parts[0]), scorePolymarketTrader(parts[1])]);
       if (!d1 || !d2) { await tgSend(chatId, '❌ One or both wallets not found.'); return; }
 
-      await tgSend(chatId, `⚔️ <b>VIGIL Head-to-Head</b>\n\n${tgGradeEmoji(d1.trustGrade)} <b>${hEsc(d1.displayName?.split('-')[0] || d1.wallet.slice(0,10))}</b>: ${d1.trustGrade}/${d1.trustScore}\n${tgGradeEmoji(d2.trustGrade)} <b>${hEsc(d2.displayName?.split('-')[0] || d2.wallet.slice(0,10))}</b>: ${d2.trustGrade}/${d2.trustScore}\n\n💰 ${tgPnl(d1.raw.totalPnl)} vs ${tgPnl(d2.raw.totalPnl)}\n\n🔗 <a href="https://vigil-trust-api.onrender.com/polymarket/compare?w1=${d1.wallet}&w2=${d2.wallet}">Full Comparison</a>`);
+      await tgSend(chatId, `⚔️ <b>VIGIL Head-to-Head</b>\n\n${tgGradeEmoji(d1.trustGrade)} <b>${hEsc(d1.displayName?.split('-')[0] || d1.wallet.slice(0,10))}</b>: ${d1.trustGrade}/${d1.trustScore}\n${tgGradeEmoji(d2.trustGrade)} <b>${hEsc(d2.displayName?.split('-')[0] || d2.wallet.slice(0,10))}</b>: ${d2.trustGrade}/${d2.trustScore}\n\n💰 ${tgPnl(d1.raw.totalPnl)} vs ${tgPnl(d2.raw.totalPnl)}\n\n🔗 <a href="https://vigilscore.xyz/polymarket/compare?w1=${d1.wallet}&w2=${d2.wallet}">Full Comparison</a>`);
     } else if (text.startsWith('/top') || text.startsWith('/leaderboard')) {
       let lb = '🏆 <b>Polymarket Top 10 — VIGIL Scored</b>\n\n';
       for (let i = 0; i < TOP_WALLETS.length; i++) {
         const w = TOP_WALLETS[i];
         lb += `${i + 1}. ${tgGradeEmoji(w.grade)} <b>${hEsc(w.name)}</b> ${w.grade}/${w.score} — ${tgPnl(w.pnl)}\n`;
       }
-      lb += `\n🔗 <a href="https://vigil-trust-api.onrender.com">Full Leaderboard</a>`;
+      lb += `\n🔗 <a href="https://vigilscore.xyz">Full Leaderboard</a>`;
       await tgSend(chatId, lb);
     }
   } catch (e: any) {
@@ -3111,7 +3121,7 @@ app.post('/telegram/webhook', async (req, res) => {
 // Setup webhook endpoint (call once to register)
 app.get('/telegram/setup', async (req, res) => {
   if (!TG_BOT_TOKEN) { res.json({ error: 'TELEGRAM_BOT_TOKEN not set' }); return; }
-  const webhookUrl = `https://vigil-trust-api.onrender.com/telegram/webhook`;
+  const webhookUrl = `https://vigilscore.xyz/telegram/webhook`;
   const result = await fetch(`${TG_API_BASE}/setWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
