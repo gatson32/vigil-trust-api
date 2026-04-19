@@ -474,6 +474,65 @@ app.get('/legacy-home', (_req, res) => {
   res.type('html').send(renderHomepage());
 });
 
+// --- Static social cards (OG / Twitter) — served as cached PNG bytes ---
+const OG_PNG = readFileSync(join(__dirname_landing, 'static', 'og', 'vigil-og.png'));
+const TWITTER_PNG = readFileSync(join(__dirname_landing, 'static', 'og', 'vigil-twitter.png'));
+app.get('/static/og/vigil-og.png', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=604800, immutable');
+  res.type('image/png').send(OG_PNG);
+});
+app.get('/static/og/vigil-twitter.png', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=604800, immutable');
+  res.type('image/png').send(TWITTER_PNG);
+});
+
+// --- Crawler primitives ---
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send([
+    'User-agent: *',
+    'Allow: /',
+    'Disallow: /v1/polymarket/discover/crawl',
+    'Disallow: /telegram/',
+    'Disallow: /legacy-home',
+    '',
+    'Sitemap: https://vigil-trust-api.onrender.com/sitemap.xml',
+    '',
+  ].join('\n'));
+});
+
+app.get('/sitemap.xml', (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const staticUrls = [
+    { loc: '/', priority: '1.0', changefreq: 'daily' },
+    { loc: '/polymarket', priority: '0.9', changefreq: 'hourly' },
+    { loc: '/polymarket/leaderboard', priority: '0.9', changefreq: 'hourly' },
+    { loc: '/polymarket/methodology', priority: '0.7', changefreq: 'weekly' },
+    { loc: '/polymarket/changelog', priority: '0.6', changefreq: 'weekly' },
+    { loc: '/polymarket/compare', priority: '0.6', changefreq: 'weekly' },
+    { loc: '/v1/polymarket/api-docs', priority: '0.7', changefreq: 'weekly' },
+    { loc: '/pricing', priority: '0.7', changefreq: 'monthly' },
+  ];
+  let leaderboardUrls: Array<{ loc: string; priority: string; changefreq: string }> = [];
+  try {
+    const lb = getSkillLeaderboard();
+    if (lb && lb.length) {
+      leaderboardUrls = lb.slice(0, 500).map(e => ({
+        loc: `/polymarket/${e.wallet}`,
+        priority: '0.5',
+        changefreq: 'daily',
+      }));
+    }
+  } catch (_) { /* ignore */ }
+  const all = [...staticUrls, ...leaderboardUrls];
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...all.map(u => `<url><loc>https://vigil-trust-api.onrender.com${u.loc}</loc><lastmod>${today}</lastmod><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`),
+    '</urlset>',
+  ].join('\n');
+  res.type('application/xml').send(xml);
+});
+
 // --- Health check ---
 app.get('/v1/health', async (_req, res) => {
   const historyStats = await getHistoryStats();

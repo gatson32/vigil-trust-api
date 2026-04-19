@@ -354,6 +354,63 @@ footer a:hover{color:var(--accent)}
   .changelog{font-size:11px;padding:8px 16px}
 }
 </style>
+
+<!-- JSON-LD for SERP rich results -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "VIGIL",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Web",
+      "url": "https://vigil-trust-api.onrender.com/",
+      "description": "VIGIL grades every Polymarket wallet A-F on actual forecasting skill - Brier Skill Score, calibration, consistency, discipline. Not PnL. Not luck. Not size.",
+      "softwareVersion": "1.21.0",
+      "offers": [
+        {"@type": "Offer", "name": "Hobby", "price": "0", "priceCurrency": "USD"},
+        {"@type": "Offer", "name": "Pro", "price": "29", "priceCurrency": "USD"}
+      ],
+      "creator": {
+        "@type": "Person",
+        "name": "Chris Gatson",
+        "url": "https://twitter.com/gatson32"
+      }
+    },
+    {
+      "@type": "WebSite",
+      "name": "VIGIL",
+      "url": "https://vigil-trust-api.onrender.com/",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https://vigil-trust-api.onrender.com/polymarket/search?q={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How does VIGIL score Polymarket wallets?",
+          "acceptedAnswer": {"@type": "Answer", "text": "VIGIL uses six weighted dimensions - calibration (25%), profitability (20%), live edge (20%), consistency (15%), discipline (10%), and sample size (10%) - derived from Brier Skill Score against market-implied probability, non-linear logistic curves, and on-chain USDC verification on Base."}
+        },
+        {
+          "@type": "Question",
+          "name": "What is Brier Skill Score?",
+          "acceptedAnswer": {"@type": "Answer", "text": "Brier Skill Score (BSS) measures how much better a forecaster's predictions are than a naive 'always predict the base rate' baseline. Positive means skill. Negative means worse than guessing. VIGIL uses BSS as the calibration primitive - same methodology as IARPA's superforecaster program."}
+        },
+        {
+          "@type": "Question",
+          "name": "Is VIGIL free?",
+          "acceptedAnswer": {"@type": "Answer", "text": "Yes - scoring any Polymarket wallet is free with no signup. API access has a Hobby tier at $0/month, Pro at $29/month, and Enterprise by request."}
+        }
+      ]
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
