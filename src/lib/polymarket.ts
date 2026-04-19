@@ -1281,6 +1281,36 @@ export function getSkillLeaderboard(): LeaderboardEntry[] {
   return skillLeaderboard;
 }
 
+/** v1.20.2: Load leaderboard from database on boot — survives deploys */
+export async function loadLeaderboardFromDb(): Promise<number> {
+  try {
+    const rows = await query(
+      `SELECT wallet, display_name, trust_grade, trust_score, brier_skill, calibration_error, resolved_bets, realized_pnl, scored_at
+       FROM leaderboard_cache ORDER BY trust_score DESC LIMIT 500`
+    );
+    if (rows.length > 0) {
+      skillLeaderboard = rows.map((r: any) => ({
+        wallet: r.wallet,
+        displayName: r.display_name || `Trader ${r.wallet.slice(0, 8)}...`,
+        trustScore: r.trust_score,
+        trustGrade: r.trust_grade,
+        brierSkillScore: r.brier_skill || 0,
+        calibrationError: r.calibration_error || 0,
+        resolvedBets: r.resolved_bets || 0,
+        winRate: 0,
+        realizedPnl: r.realized_pnl || 0,
+        scoredAt: r.scored_at?.toISOString?.() || new Date().toISOString(),
+      }));
+      lastCrawlTime = rows[0].scored_at?.toISOString?.() || null;
+      console.log(`[BOOT] Loaded ${rows.length} wallets from leaderboard_cache (top: ${rows[0].display_name} ${rows[0].trust_grade}/${rows[0].trust_score})`);
+    }
+    return rows.length;
+  } catch (err) {
+    console.error('[BOOT] Failed to load leaderboard from DB:', (err as Error).message);
+    return 0;
+  }
+}
+
 /** Get crawler status */
 export function getCrawlerStatus() {
   return {
@@ -1470,6 +1500,29 @@ export async function buildSkillLeaderboard(
   skillLeaderboard = entries;
   lastCrawlTime = new Date().toISOString();
   console.log(`[VIGIL Crawler] Leaderboard built: ${entries.length} qualified wallets (${errors} errors)`);
+
+  // v1.20.2: Persist leaderboard to database so it survives deploys
+  try {
+    for (const e of entries) {
+      await query(
+        `INSERT INTO leaderboard_cache (wallet, display_name, trust_grade, trust_score, brier_skill, calibration_error, resolved_bets, realized_pnl, scored_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         ON CONFLICT (wallet) DO UPDATE SET
+           display_name = EXCLUDED.display_name,
+           trust_grade = EXCLUDED.trust_grade,
+           trust_score = EXCLUDED.trust_score,
+           brier_skill = EXCLUDED.brier_skill,
+           calibration_error = EXCLUDED.calibration_error,
+           resolved_bets = EXCLUDED.resolved_bets,
+           realized_pnl = EXCLUDED.realized_pnl,
+           scored_at = NOW()`,
+        [e.wallet, e.displayName, e.trustGrade, e.trustScore, e.brierSkillScore, e.calibrationError, e.resolvedBets, e.realizedPnl],
+      );
+    }
+    console.log(`[VIGIL Crawler] Persisted ${entries.length} wallets to leaderboard_cache`);
+  } catch (err) {
+    console.error('[VIGIL Crawler] Failed to persist leaderboard:', (err as Error).message);
+  }
 
   // Log the top performers
   const topGrades = entries.slice(0, 10).map(e => `${e.displayName}: ${e.trustGrade}/${e.trustScore}`);

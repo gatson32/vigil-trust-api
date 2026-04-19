@@ -38,6 +38,7 @@ import {
   runDiscoveryCrawl,
   getSkillLeaderboard,
   getCrawlerStatus,
+  loadLeaderboardFromDb,
   type LeaderboardEntry,
 } from './lib/polymarket.js';
 import {
@@ -3047,6 +3048,14 @@ async function start() {
       }
     } catch (err) {
       console.error('[BOOT] Failed to load subscribers:', err);
+    }
+
+    // v1.20.2: Load full leaderboard from DB so it's instant after deploys
+    try {
+      const loaded = await loadLeaderboardFromDb();
+      console.log(`[BOOT] Leaderboard: ${loaded} wallets loaded from database`);
+    } catch (err) {
+      console.error('[BOOT] Failed to load leaderboard from DB:', err);
     }
 
     // Load discovery alerts so homepage elite table works immediately (before crawler runs)

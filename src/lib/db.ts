@@ -241,6 +241,21 @@ async function runMigrations(): Promise<void> {
       resolved_bets INTEGER,
       discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS leaderboard_cache (
+      wallet        TEXT PRIMARY KEY,
+      display_name  TEXT,
+      trust_grade   TEXT NOT NULL,
+      trust_score   INTEGER NOT NULL,
+      brier_skill   REAL,
+      calibration_error REAL,
+      resolved_bets INTEGER,
+      realized_pnl  REAL,
+      scored_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_leaderboard_score
+      ON leaderboard_cache (trust_score DESC);
   `);
 }
 
