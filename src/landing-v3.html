@@ -372,7 +372,9 @@ footer a:hover{color:var(--accent)}
       "softwareVersion": "1.21.0",
       "offers": [
         {"@type": "Offer", "name": "Hobby", "price": "0", "priceCurrency": "USD"},
-        {"@type": "Offer", "name": "Pro", "price": "29", "priceCurrency": "USD"}
+        {"@type": "Offer", "name": "Pro", "price": "29", "priceCurrency": "USD"},
+        {"@type": "Offer", "name": "Team", "price": "149", "priceCurrency": "USD"},
+        {"@type": "Offer", "name": "Enterprise", "price": "999", "priceCurrency": "USD", "priceSpecification": {"@type": "PriceSpecification", "price": "999", "priceCurrency": "USD", "valueAddedTaxIncluded": false, "description": "Starting price; scales with volume."}}
       ],
       "creator": {
         "@type": "Person",
@@ -406,7 +408,7 @@ footer a:hover{color:var(--accent)}
         {
           "@type": "Question",
           "name": "Is VIGIL free?",
-          "acceptedAnswer": {"@type": "Answer", "text": "Yes - scoring any Polymarket wallet is free with no signup. API access has a Hobby tier at $0/month, Pro at $29/month, and Enterprise by request."}
+          "acceptedAnswer": {"@type": "Answer", "text": "Yes - scoring any Polymarket wallet is free with no signup. API access: Hobby $0/mo, Pro $29/mo, Team $149/mo, Enterprise from $999/mo."}
         }
       ]
     }
@@ -879,11 +881,16 @@ footer a:hover{color:var(--accent)}
         <span class="px">$29/mo</span>
       </div>
       <div class="tier">
-        <span class="name ent">Enterprise</span>
-        <span class="desc">unlimited · custom dimensions · SLA · feed</span>
-        <span class="px">hit me up</span>
+        <span class="name pro">Team</span>
+        <span class="desc">3,000 req/min · 10 seats · CSV export · priority queue</span>
+        <span class="px">$149/mo</span>
       </div>
-      <p style="color:var(--mute);font-size:12px;margin-top:14px;font-family:var(--mono)">No auth on hobby. Rate-limited by IP. If you need more, email <a href="mailto:gatson32@gmail.com">gatson32@gmail.com</a> and tell me what you're building — I'll turn the spigot up.</p>
+      <div class="tier">
+        <span class="name ent">Enterprise</span>
+        <span class="desc">custom dims · SLA · firehose · on-prem option</span>
+        <span class="px">from $999/mo</span>
+      </div>
+      <p style="color:var(--mute);font-size:12px;margin-top:14px;font-family:var(--mono)">No auth on hobby. Rate-limited by IP. Pro and Team are self-serve — card on file, activated in minutes. Enterprise starts at $999/mo for a firehose + SLA; email <a href="mailto:gatson32@gmail.com">gatson32@gmail.com</a> with your use case.</p>
     </div>
   </div>
 </section>
