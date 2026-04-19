@@ -516,11 +516,9 @@ app.get('/sitemap.xml', (_req, res) => {
     { loc: '/', priority: '1.0', changefreq: 'daily' },
     { loc: '/polymarket', priority: '0.9', changefreq: 'hourly' },
     { loc: '/polymarket/leaderboard', priority: '0.9', changefreq: 'hourly' },
-    { loc: '/polymarket/methodology', priority: '0.7', changefreq: 'weekly' },
-    { loc: '/polymarket/changelog', priority: '0.6', changefreq: 'weekly' },
-    { loc: '/polymarket/compare', priority: '0.6', changefreq: 'weekly' },
-    { loc: '/v1/polymarket/api-docs', priority: '0.7', changefreq: 'weekly' },
-    { loc: '/pricing', priority: '0.7', changefreq: 'monthly' },
+    { loc: '/v1', priority: '0.7', changefreq: 'weekly' },
+    { loc: '/api/pricing', priority: '0.6', changefreq: 'monthly' },
+    { loc: '/privacy', priority: '0.3', changefreq: 'yearly' },
   ];
   let leaderboardUrls: Array<{ loc: string; priority: string; changefreq: string }> = [];
   try {
@@ -2037,9 +2035,17 @@ app.get('/v1/polymarket/search', (req, res) => {
   res.json({ query: q, results });
 });
 
+// Legacy URL redirects — these paths are linked from the landing page but not
+// yet built as standalone pages. Redirect to the relevant landing anchor / working
+// equivalent so internal links and cached shares never 404.
+app.get('/polymarket/methodology', (_req, res) => res.redirect(301, '/#how'));
+app.get('/polymarket/changelog', (_req, res) => res.redirect(301, '/#builder'));
+app.get('/polymarket/weekly', (_req, res) => res.redirect(301, '/#social'));
+app.get('/v1/polymarket/api-docs', (_req, res) => res.redirect(301, '/v1'));
+
 // HTML score card for a Polymarket trader
 app.get('/polymarket/:wallet', async (req, res, next) => {
-  if (['compare', 'search', 'leaderboard'].includes(req.params.wallet)) return next();
+  if (['compare', 'search', 'leaderboard', 'methodology', 'changelog', 'weekly'].includes(req.params.wallet)) return next();
   let wallet = String(req.params.wallet || '').trim();
 
   // If not a wallet address, try username resolution
