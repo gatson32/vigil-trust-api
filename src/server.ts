@@ -4,6 +4,13 @@
 import express from 'express';
 import cors from 'cors';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename_landing = fileURLToPath(import.meta.url);
+const __dirname_landing = dirname(__filename_landing);
+const LANDING_V3_HTML = readFileSync(join(__dirname_landing, 'landing-v3.html'), 'utf-8');
 import { scoreAgent, TIER_CONFIG, type ScoredAgent } from './lib/scoring.js';
 import {
   fetchAgentsPage,
@@ -457,8 +464,13 @@ app.get('/google3752379bc7fac689.html', (_req, res) => {
   res.type('html').send('google-site-verification: google3752379bc7fac689.html');
 });
 
-// --- Homepage ---
+// --- Homepage (v3 landing: 88.6/100 from 30-reviewer panel; percentile grades, live ticker, curl+JSON, pricing, multiplayer teaser) ---
 app.get('/', (_req, res) => {
+  res.type('html').send(LANDING_V3_HTML);
+});
+
+// --- Legacy homepage (preserved at /v1 for API landing / internal reference) ---
+app.get('/legacy-home', (_req, res) => {
   res.type('html').send(renderHomepage());
 });
 
@@ -1855,6 +1867,68 @@ app.get('/v1/polymarket/:wallet', async (req, res, next) => {
 
     addRecentScore(report);
     return res.json(report);
+  } catch (err) {
+    return res.status(502).json({ error: 'POLYMARKET_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+// v3 landing scorer alias — accepts ?wallet=0x... | ?wallet=username | ?wallet=ens.eth
+// Resolves identifier, scores, augments with percentile for the landing-page UI.
+app.get('/v1/polymarket/score', async (req, res) => {
+  try {
+    const raw = String(req.query.wallet || '').trim();
+    if (!raw) return res.status(400).json({ error: 'MISSING_WALLET', message: 'Provide ?wallet=<0x address | username | ens>.' });
+
+    // Resolve non-0x identifiers (usernames, ENS) to a wallet address
+    let wallet = raw;
+    if (!raw.startsWith('0x')) {
+      const resolved = resolveWalletIdentifier(raw);
+      if (!resolved) {
+        return res.status(404).json({ error: 'UNRESOLVED_IDENTIFIER', message: `Could not resolve "${raw}" to a wallet. Try a 0x address.` });
+      }
+      wallet = resolved;
+    }
+    if (!wallet.startsWith('0x')) {
+      return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a valid 0x wallet address.' });
+    }
+
+    // Re-use the prescored cache
+    const walletLower = wallet.toLowerCase();
+    const cached = prescoredCache.get(walletLower);
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    let report: any;
+    if (cached && (Date.now() - cached.cachedAt) < TWO_HOURS_MS) {
+      const { cachedAt, ...rest } = cached;
+      report = { ...rest, cached: true, cachedAt };
+    } else {
+      const fresh = await scorePolymarketTrader(wallet);
+      if (!fresh) {
+        return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
+      }
+      prescoredCache.set(walletLower, { ...fresh, cachedAt: Date.now() });
+      addRecentScore(fresh);
+      report = fresh;
+    }
+
+    // Augment with percentile against live skill leaderboard
+    let percentile: number | null = null;
+    try {
+      const lb = getSkillLeaderboard();
+      if (lb && lb.length > 1) {
+        const myScore = (report as any).trustScore ?? (report as any).score ?? 0;
+        const below = lb.filter(e => (e.trustScore ?? 0) <= myScore).length;
+        percentile = Math.round((below / lb.length) * 100);
+      }
+    } catch (_) { /* ignore */ }
+
+    return res.json({
+      ...(report as any),
+      grade: (report as any).trustGrade ?? (report as any).grade,
+      score: (report as any).trustScore ?? (report as any).score,
+      bss: (report as any).brierSkillScore ?? (report as any).bss,
+      resolved: (report as any).resolvedBets ?? (report as any).resolved,
+      percentile,
+    });
   } catch (err) {
     return res.status(502).json({ error: 'POLYMARKET_UPSTREAM_ERROR', message: (err as Error).message });
   }

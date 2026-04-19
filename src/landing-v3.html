@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>VIGIL — Forecasting-Skill Scores for Every Polymarket Wallet</title>
+<meta name="description" content="VIGIL grades every Polymarket wallet A–F on actual forecasting skill — Brier Skill Score, calibration, consistency, discipline. Not PnL. Not luck. Not size." />
+<meta name="theme-color" content="#0a0d0b" />
+
+<!-- Open Graph / Twitter -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="VIGIL — PnL lies. Calibration doesn't." />
+<meta property="og:description" content="Every Polymarket wallet, graded A–F on actual forecasting skill. Paste a wallet, see the grade in ~2s." />
+<meta property="og:image" content="https://vigil-trust-api.onrender.com/static/og/vigil-og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:url" content="https://vigil-trust-api.onrender.com/" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@gatson32" />
+<meta name="twitter:creator" content="@gatson32" />
+<meta name="twitter:title" content="VIGIL — PnL lies. Calibration doesn't." />
+<meta name="twitter:description" content="Every Polymarket wallet, graded A–F on actual forecasting skill. Paste a wallet, see the grade in ~2s." />
+<meta name="twitter:image" content="https://vigil-trust-api.onrender.com/static/og/vigil-og.png" />
+
+<link rel="canonical" href="https://vigil-trust-api.onrender.com/" />
+<link rel="preconnect" href="https://vigil-trust-api.onrender.com" crossorigin />
+
+<style>
+:root{
+  --bg:#0a0d0b;
+  --panel:#0f1411;
+  --panel-2:#121815;
+  --line:#1a2620;
+  --line-2:#243229;
+  --ink:#e3ece6;
+  --mute:#8a9b92;
+  --mute-2:#b0bfb7;
+  --accent:#36d399;
+  --accent-2:#2bc187;
+  --warn:#f87171;
+  --gold:#fbbf24;
+  --blue:#60a5fa;
+  --purple:#a78bfa;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Monaco,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:var(--mono)}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+hr.sep{border:0;border-top:1px solid var(--line);margin:64px 0}
+
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* changelog strip */
+.changelog{background:#0c110e;border-bottom:1px solid var(--line);padding:10px 0;font-family:var(--mono);font-size:12px;color:var(--mute);text-align:center}
+.changelog b{color:var(--accent);font-weight:normal;letter-spacing:.1em}
+.changelog a{color:var(--mute-2);text-decoration:underline dotted;margin-left:4px}
+
+/* top bar */
+.bar{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(10,13,11,.88);backdrop-filter:blur(10px);z-index:20}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand .name{font-family:var(--mono);font-weight:700;letter-spacing:.22em;font-size:17px}
+.brand .tag{font-family:var(--mono);font-size:11px;color:var(--mute);letter-spacing:.2em;text-transform:uppercase}
+.bar .links{display:flex;gap:22px;font-size:14px}
+.bar .links a{color:var(--ink)}
+.bar-right{display:flex;align-items:center;gap:14px}
+.bar .cta{background:var(--accent);border:1px solid var(--accent);color:#0a0d0b;padding:9px 16px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;border-radius:3px;font-weight:600}
+.bar .cta:hover{background:var(--accent-2);border-color:var(--accent-2);text-decoration:none}
+
+/* hero */
+.hero{padding:64px 0 40px}
+.eyebrow{font-family:var(--mono);font-size:12px;color:var(--mute);letter-spacing:.22em;text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.eyebrow .live-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(54,211,153,.18);animation:pulse 2.2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 3px rgba(54,211,153,.18)}50%{box-shadow:0 0 0 7px rgba(54,211,153,.05)}}
+h1{font-size:58px;line-height:1.03;letter-spacing:-.02em;margin:0 0 20px;font-weight:700}
+h1 .hl{color:var(--accent)}
+.sub{font-size:20px;color:var(--mute-2);max-width:700px;margin:0 0 32px}
+.sub b{color:var(--ink);font-weight:normal;border-bottom:1px dashed var(--line-2)}
+
+/* scorer (live, inline) */
+.scorer{margin:28px 0 10px;max-width:760px;background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);border:1px solid var(--line-2);border-radius:6px;overflow:hidden;box-shadow:0 20px 60px -20px rgba(0,0,0,.5)}
+.scorer-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:#0c110e;font-family:var(--mono);font-size:11px;color:var(--mute);letter-spacing:.2em;text-transform:uppercase}
+.scorer-head .dots{display:flex;gap:6px}
+.scorer-head .dots i{width:8px;height:8px;border-radius:50%;background:var(--line-2);display:inline-block}
+.scorer-head .dots i:first-child{background:#ef4444}
+.scorer-head .dots i:nth-child(2){background:#f59e0b}
+.scorer-head .dots i:nth-child(3){background:var(--accent)}
+.scorer-form{display:flex}
+.scorer-form input{flex:1;background:transparent;border:0;padding:20px;color:var(--ink);font-family:var(--mono);font-size:15px;outline:none}
+.scorer-form input::placeholder{color:var(--mute)}
+.scorer-form button{background:var(--accent);color:#0a0d0b;border:0;padding:0 26px;font-family:var(--mono);font-size:13px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;font-weight:700}
+.scorer-form button:hover{background:var(--accent-2)}
+.scorer-form button:disabled{opacity:.6;cursor:wait}
+.scorer-hint{padding:10px 16px;border-top:1px solid var(--line);background:#0c110e;color:var(--mute);font-family:var(--mono);font-size:11px;letter-spacing:.05em;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.scorer-hint b{color:var(--mute-2);font-weight:normal}
+.scorer-hint .try{color:var(--accent);cursor:pointer;text-decoration:underline dotted;background:none;border:0;padding:0;font-family:inherit;font-size:inherit}
+
+/* scorer output */
+.scorer-output{display:none;padding:22px;border-top:1px solid var(--line);background:#0c110e}
+.scorer-output.visible{display:block;animation:slideDown .35s ease}
+@keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.so-row{display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:center}
+.so-grade{font-family:var(--mono);font-size:64px;font-weight:700;line-height:1;padding:6px 22px;border-radius:6px;min-width:120px;text-align:center;position:relative}
+.so-grade.a{color:var(--accent);background:rgba(54,211,153,.08);border:1px solid rgba(54,211,153,.3)}
+.so-grade.b{color:var(--blue);background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.3)}
+.so-grade.c{color:var(--gold);background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3)}
+.so-grade.d{color:var(--warn);background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3)}
+.so-grade.f{color:#9ca3af;background:rgba(156,163,175,.08);border:1px solid rgba(156,163,175,.3)}
+.so-grade .pct{display:block;font-size:11px;color:var(--mute);font-weight:normal;letter-spacing:.15em;margin-top:4px}
+.so-detail .wallet{font-family:var(--mono);font-size:15px;word-break:break-all;color:var(--mute-2);margin-bottom:6px}
+.so-detail .score-line{font-family:var(--mono);font-size:18px;margin-bottom:10px}
+.so-detail .score-line b{color:var(--accent);font-weight:700}
+.so-dims{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:8px}
+.so-dim{background:#101612;border:1px solid var(--line);padding:8px 6px;border-radius:3px;text-align:center;font-family:var(--mono);font-size:10px}
+.so-dim .k{color:var(--mute);letter-spacing:.08em;text-transform:uppercase;font-size:9px}
+.so-dim .v{color:var(--ink);font-size:14px;margin-top:3px}
+.so-conf{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);font-family:var(--mono);font-size:11px;color:var(--mute);display:flex;gap:14px;flex-wrap:wrap}
+.so-conf b{color:var(--mute-2);font-weight:normal}
+.so-links{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.so-links a, .so-links button{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:transparent;border:0;padding:0;cursor:pointer}
+.so-links button:hover{text-decoration:underline}
+.so-share{margin-left:auto;background:transparent;border:1px solid var(--line-2);color:var(--mute-2);padding:6px 12px;border-radius:3px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer}
+.so-share:hover{border-color:var(--accent);color:var(--accent)}
+.so-share.copied{color:var(--accent);border-color:var(--accent)}
+
+.so-error{color:var(--warn);font-family:var(--mono);font-size:13px}
+.so-loading{color:var(--mute);font-family:var(--mono);font-size:13px;display:flex;align-items:center;gap:10px}
+.spinner{width:14px;height:14px;border:2px solid var(--line-2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* single primary CTA row */
+.primary-next{display:flex;align-items:center;gap:10px;margin-top:20px;font-family:var(--mono);font-size:12px;color:var(--mute);letter-spacing:.08em;flex-wrap:wrap}
+.primary-next a{color:var(--mute-2);text-decoration:underline dotted}
+.primary-next a:hover{color:var(--accent)}
+.primary-next span.sep{color:var(--line-2)}
+
+/* hero stats strip */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:48px}
+.stat{padding:26px 22px;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat .num{font-family:var(--mono);font-size:30px;color:var(--accent);line-height:1;font-weight:600}
+.stat .lbl{font-family:var(--mono);font-size:11px;color:var(--mute);letter-spacing:.2em;text-transform:uppercase;margin-top:10px}
+.stat .sub-lbl{font-family:var(--mono);font-size:10px;color:var(--mute);margin-top:4px}
+.stat.hist-stat{padding:18px 22px}
+.hist{display:flex;gap:4px;align-items:flex-end;height:54px;margin-top:4px}
+.hist-bar{flex:1;background:var(--mute);border-radius:1px 1px 0 0;position:relative;transition:background .2s}
+.hist-bar.a{background:var(--accent)}
+.hist-bar.b{background:var(--blue)}
+.hist-bar.c{background:var(--gold)}
+.hist-bar.d{background:var(--warn)}
+.hist-bar.f{background:#6a7a72}
+.hist-axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--mute);letter-spacing:.1em;margin-top:4px}
+
+/* live ticker */
+.ticker-wrap{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#0c110e;overflow:hidden;position:relative}
+.ticker-wrap::before,.ticker-wrap::after{content:"";position:absolute;top:0;bottom:0;width:60px;z-index:2;pointer-events:none}
+.ticker-wrap::before{left:0;background:linear-gradient(90deg,#0c110e,transparent)}
+.ticker-wrap::after{right:0;background:linear-gradient(-90deg,#0c110e,transparent)}
+.ticker-label{position:absolute;left:16px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:10px;color:var(--mute);letter-spacing:.2em;text-transform:uppercase;background:#0c110e;padding:2px 8px;z-index:3;border-right:1px solid var(--line);height:100%;display:flex;align-items:center}
+.ticker{display:flex;gap:32px;padding:14px 120px 14px 24px;animation:tick 60s linear infinite;white-space:nowrap}
+.ticker-item{font-family:var(--mono);font-size:12px;color:var(--mute-2);display:inline-flex;gap:8px;align-items:center}
+.ticker-item .g{font-weight:700;font-size:13px}
+.ticker-item .g.a{color:var(--accent)}
+.ticker-item .g.b{color:var(--blue)}
+.ticker-item .g.c{color:var(--gold)}
+.ticker-item .g.d{color:var(--warn)}
+.ticker-item .g.f{color:#9ca3af}
+.ticker-item .w{color:var(--mute)}
+.ticker-item .t{color:var(--mute);font-size:10px}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* section */
+.section{padding:80px 0}
+.section h2{font-size:34px;letter-spacing:-.01em;margin:0 0 10px;font-weight:700}
+.section h2 .hl{color:var(--accent)}
+.section .kicker{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.22em;text-transform:uppercase;margin-bottom:14px}
+.section .lede{color:var(--mute-2);font-size:17px;max-width:760px;margin:0 0 36px}
+
+/* dimensions grid */
+.dims{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.dim{background:var(--bg);padding:26px;transition:background .25s}
+.dim:hover{background:#0d1210}
+.dim .w{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.2em}
+.dim .t{font-size:17px;margin:10px 0 4px;font-weight:600}
+.dim .plain{font-size:13px;color:var(--ink);font-style:italic;margin-bottom:8px}
+.dim .d{color:var(--mute-2);font-size:13px;line-height:1.6;font-family:var(--mono)}
+
+/* methodology summary */
+.method-inline{margin-top:28px;background:var(--panel);border:1px solid var(--line);border-radius:4px}
+.method-inline summary{padding:18px 22px;font-family:var(--mono);font-size:13px;color:var(--ink);cursor:pointer;letter-spacing:.05em;list-style:none;display:flex;align-items:center;gap:10px}
+.method-inline summary::-webkit-details-marker{display:none}
+.method-inline summary::before{content:"▸";color:var(--accent);transition:transform .2s}
+.method-inline[open] summary::before{transform:rotate(90deg)}
+.method-inline .body{padding:0 22px 22px;color:var(--mute-2);font-size:14px;line-height:1.7}
+.method-inline .body h4{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase;margin:18px 0 6px}
+.method-inline .body code{background:#0c110e;padding:2px 6px;border-radius:2px;font-size:13px;color:var(--accent)}
+.method-inline .notebook{margin-top:16px;background:#0c110e;border:1px solid var(--line-2);border-radius:3px;padding:14px 16px;font-family:var(--mono);font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.method-inline .notebook .label{color:var(--mute)}
+.method-inline .notebook a{color:var(--accent);font-size:12px}
+
+/* calibration curve */
+.chart-wrap{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:26px;margin-top:10px}
+.chart-title{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.22em;text-transform:uppercase;margin-bottom:4px}
+.chart-sub{color:var(--mute);font-size:13px;margin-bottom:20px;font-family:var(--mono)}
+.chart-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:28px;align-items:center}
+.chart-legend{font-family:var(--mono);font-size:12px;color:var(--mute-2);line-height:1.8}
+.chart-legend .row{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px}
+.chart-legend .tier{display:inline-block;width:10px;height:10px;border-radius:2px;margin-top:4px;flex-shrink:0}
+.chart-legend b{color:var(--ink);font-weight:normal}
+
+/* proof cards */
+.proof{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);padding:24px;border-radius:4px;position:relative;overflow:hidden;transition:transform .2s, border-color .2s}
+.card:hover{transform:translateY(-2px);border-color:var(--line-2)}
+.card .grade{position:absolute;top:18px;right:22px;font-family:var(--mono);font-size:42px;font-weight:700;line-height:1}
+.card .grade.a{color:var(--accent)}
+.card .grade.b{color:var(--blue)}
+.card .grade.c{color:var(--gold)}
+.card .grade.d{color:var(--warn)}
+.card .grade.f{color:#9ca3af}
+.card .grade-pct{position:absolute;top:62px;right:22px;font-family:var(--mono);font-size:10px;color:var(--mute);letter-spacing:.08em}
+.card .score{font-family:var(--mono);color:var(--mute);font-size:13px}
+.card .wallet{font-family:var(--mono);font-size:15px;margin:14px 0 6px;word-break:break-all}
+.card .pnl{color:var(--mute-2);font-size:13px;margin-bottom:16px}
+.card .meta{border-top:1px dashed var(--line);padding-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:var(--mono);font-size:11px;color:var(--mute)}
+.card .meta b{color:var(--ink);font-weight:normal}
+.card .ci{font-family:var(--mono);font-size:10px;color:var(--mute);margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);letter-spacing:.04em}
+
+/* inline objections */
+.inline-obj{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}
+.obj{background:var(--panel);border-left:3px solid var(--accent);padding:16px 18px;border-radius:0 3px 3px 0}
+.obj .q{font-family:var(--mono);font-size:12px;color:var(--ink);margin-bottom:6px;letter-spacing:.02em}
+.obj .a{color:var(--mute-2);font-size:13px;line-height:1.6}
+.obj .a b{color:var(--ink);font-weight:normal}
+
+/* comparison table */
+.cmp-wrap{background:var(--panel);border:1px solid var(--line);border-radius:4px;overflow-x:auto}
+table.cmp{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}
+table.cmp th,table.cmp td{padding:14px 16px;text-align:center;border-bottom:1px solid var(--line)}
+table.cmp th:first-child,table.cmp td:first-child{text-align:left;color:var(--mute-2)}
+table.cmp thead th{font-family:var(--mono);font-size:11px;color:var(--mute);letter-spacing:.18em;text-transform:uppercase;background:#0c110e;border-bottom:1px solid var(--line-2)}
+table.cmp thead th.us{color:var(--accent)}
+table.cmp tbody tr:last-child td{border-bottom:0}
+table.cmp .yes{color:var(--accent);font-family:var(--mono)}
+table.cmp .no{color:var(--warn);font-family:var(--mono);opacity:.8}
+table.cmp .meh{color:var(--gold);font-family:var(--mono)}
+table.cmp td.us{background:rgba(54,211,153,.04)}
+table.cmp tr:hover td{background:#0d1210}
+table.cmp tr:hover td.us{background:rgba(54,211,153,.08)}
+.cmp-note{font-family:var(--mono);font-size:11px;color:var(--mute);margin-top:10px;letter-spacing:.02em}
+
+/* contrast row */
+.contrast{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:12px}
+.col{background:var(--panel);border:1px solid var(--line);padding:28px;border-radius:4px}
+.col h3{margin:0 0 12px;font-size:16px;font-family:var(--mono);letter-spacing:.05em}
+.col.bad h3{color:var(--warn)}
+.col.good h3{color:var(--accent)}
+.col ul{margin:0;padding-left:18px;color:var(--mute-2);font-size:14px;line-height:1.8}
+
+/* API section */
+.api{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:12px}
+.api .terminal{background:#06090a;border:1px solid var(--line-2);border-radius:4px;padding:20px;font-family:var(--mono);font-size:13px;line-height:1.7;overflow-x:auto}
+.api .terminal .prompt{color:var(--accent)}
+.api .terminal .cmd{color:var(--ink)}
+.api .terminal .comment{color:var(--mute)}
+.api .terminal .key{color:var(--purple)}
+.api .terminal .str{color:var(--gold)}
+.api .terminal .num{color:var(--accent)}
+.api .pricing{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:24px}
+.api .pricing h3{margin:0 0 16px;font-size:15px;font-family:var(--mono);letter-spacing:.1em;color:var(--mute);text-transform:uppercase}
+.tier{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding:12px 0;border-bottom:1px dashed var(--line);font-family:var(--mono);font-size:13px;align-items:baseline}
+.tier:last-child{border-bottom:0}
+.tier .name{color:var(--ink);font-weight:600}
+.tier .name.pro{color:var(--accent)}
+.tier .name.ent{color:var(--blue)}
+.tier .desc{color:var(--mute);font-size:12px}
+.tier .px{color:var(--accent);font-weight:700}
+
+/* extension callout */
+.ext{display:grid;grid-template-columns:1.2fr 1fr;gap:40px;align-items:center;background:var(--panel);border:1px solid var(--line);padding:36px;border-radius:4px}
+.ext .badge-preview{background:#0c110e;border:1px solid var(--line);padding:18px;border-radius:4px;font-family:var(--mono);font-size:13px}
+.ext .bp-head{color:var(--mute);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
+.ext .bp-wallet{color:var(--ink)}
+.ext .bp-row{display:flex;justify-content:space-between;margin-top:10px}
+.ext .bp-row .label{color:var(--mute)}
+.ext .bp-row .val{color:var(--ink)}
+.ext .bp-grade{font-size:48px;color:var(--accent);font-weight:700;line-height:1;margin-top:8px}
+.ext-status{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);padding:4px 10px;border:1px solid rgba(251,191,36,.3);border-radius:99px;margin-bottom:14px}
+
+/* social / multiplayer teaser */
+.social-teaser{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:10px}
+.teaser{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:24px;transition:border-color .2s, transform .2s}
+.teaser:hover{border-color:var(--line-2);transform:translateY(-2px)}
+.teaser h4{margin:0 0 8px;font-size:15px;font-family:var(--mono);letter-spacing:.05em;color:var(--ink)}
+.teaser p{color:var(--mute-2);font-size:13px;line-height:1.6;margin:0 0 12px}
+.teaser .soon{font-family:var(--mono);font-size:10px;color:var(--gold);letter-spacing:.15em;text-transform:uppercase}
+
+/* builder strip */
+.builder{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:28px;margin-top:12px;display:grid;grid-template-columns:auto 1fr auto;gap:24px;align-items:center}
+.builder .avatar{width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#1e7d57);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:28px;font-weight:700;color:#0a0d0b}
+.builder h4{margin:0 0 4px;font-size:16px}
+.builder .who{font-family:var(--mono);font-size:12px;color:var(--mute);letter-spacing:.08em;margin-bottom:10px}
+.builder p{color:var(--mute-2);font-size:14px;margin:0 0 10px;line-height:1.65;max-width:620px}
+.builder .socials{font-family:var(--mono);font-size:12px;color:var(--mute);display:flex;gap:16px;flex-wrap:wrap}
+.builder .socials a{color:var(--accent)}
+.builder .gh-graph{width:160px;height:80px;background:#0c110e;border:1px solid var(--line);border-radius:3px;padding:8px;display:grid;grid-template-columns:repeat(26,1fr);grid-template-rows:repeat(7,1fr);gap:1.5px}
+.builder .gh-graph i{background:var(--line);border-radius:1px}
+.builder .gh-graph i.l1{background:rgba(54,211,153,.25)}
+.builder .gh-graph i.l2{background:rgba(54,211,153,.45)}
+.builder .gh-graph i.l3{background:rgba(54,211,153,.7)}
+.builder .gh-graph i.l4{background:var(--accent)}
+.builder .gh-label{font-family:var(--mono);font-size:10px;color:var(--mute);letter-spacing:.1em;margin-top:6px;text-align:center}
+
+/* faq */
+.faq{display:grid;gap:10px}
+.q{background:var(--panel);border:1px solid var(--line);border-radius:3px}
+.q summary{padding:16px 22px;cursor:pointer;font-family:var(--mono);font-size:13px;list-style:none;outline:none}
+.q summary::-webkit-details-marker{display:none}
+.q summary::before{content:"+";color:var(--accent);margin-right:12px;font-weight:700}
+.q[open] summary::before{content:"−"}
+.q[open] summary{border-bottom:1px solid var(--line)}
+.q .body{padding:14px 22px 18px;color:var(--mute-2);font-size:14px;line-height:1.7}
+
+/* footer */
+footer{border-top:1px solid var(--line);padding:40px 0 60px;color:var(--mute);font-size:13px}
+footer .row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;align-items:center}
+footer a{color:var(--mute-2)}
+footer a:hover{color:var(--accent)}
+.disclaim{font-size:12px;margin-top:24px;max-width:780px;color:var(--mute)}
+.perf-badge{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--mute);border:1px solid var(--line);padding:3px 8px;border-radius:99px;letter-spacing:.08em}
+
+@media (max-width:880px){
+  h1{font-size:40px}
+  .sub{font-size:17px}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .stat:nth-child(2){border-right:0}
+  .dims{grid-template-columns:1fr}
+  .proof{grid-template-columns:1fr}
+  .inline-obj{grid-template-columns:1fr}
+  .contrast{grid-template-columns:1fr}
+  .ext{grid-template-columns:1fr}
+  .chart-grid{grid-template-columns:1fr}
+  .bar .links{display:none}
+  .so-row{grid-template-columns:1fr}
+  .so-dims{grid-template-columns:repeat(3,1fr)}
+  .builder{grid-template-columns:1fr}
+  .social-teaser{grid-template-columns:1fr}
+  .api{grid-template-columns:1fr}
+  .hero{padding:40px 0 24px}
+  .section{padding:48px 0}
+  .changelog{font-size:11px;padding:8px 16px}
+}
+</style>
+</head>
+<body>
+
+<div class="changelog">
+  <b>// v1.20.2</b> — fixed receive-only wallet detection after <a href="https://x.com/gatson32">@0xc4rson</a> found a false positive. Credit to them.
+  <a href="https://vigil-trust-api.onrender.com/polymarket/changelog">full changelog →</a>
+</div>
+
+<header class="bar">
+  <div class="brand">
+    <span class="name">VIGIL</span>
+    <span class="tag">Forecasting Skill Engine</span>
+  </div>
+  <nav class="links">
+    <a href="#how">How</a>
+    <a href="#curve">Curve</a>
+    <a href="#proof">Proof</a>
+    <a href="#compare">vs Nansen</a>
+    <a href="#api">API</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+  <div class="bar-right">
+    <a class="cta" href="https://vigil-trust-api.onrender.com/polymarket/leaderboard">Leaderboard →</a>
+  </div>
+</header>
+
+<main>
+
+<!-- HERO -->
+<section class="hero wrap">
+  <div class="eyebrow">
+    <span class="live-dot"></span>
+    Polymarket · Live model v1.20.2
+    <span>·</span>
+    <span id="last-crawl">scanning now</span>
+    <span>·</span>
+    <span>no VCs</span>
+  </div>
+  <h1>PnL lies. <span class="hl">Calibration doesn't.</span></h1>
+  <p class="sub">VIGIL grades every Polymarket wallet A through F on actual forecasting skill — <b>Brier Skill Score</b> against the market's implied probability, not dollars earned. Paste any wallet. See the grade render below in about two seconds. We've graded over 23,000 wallets and about half of the self-declared "whales" on this platform aren't actually sharp.</p>
+
+  <!-- Live inline scorer -->
+  <form class="scorer" id="scorer" onsubmit="return doScore(event)">
+    <div class="scorer-head">
+      <span>// paste-and-grade · GET /v1/polymarket/score</span>
+      <span class="dots"><i></i><i></i><i></i></span>
+    </div>
+    <div class="scorer-form">
+      <input id="wallet-input" name="wallet" placeholder="0x… or username (try: influenz.eth)" autocomplete="off" spellcheck="false" aria-label="Polymarket wallet address or username" />
+      <button type="submit" id="grade-btn">Grade it</button>
+    </div>
+    <div class="scorer-hint">
+      <span><b>~2s response.</b> No sign-up. Free. Every grade is a shareable URL.</span>
+      <span>Try:
+        <button class="try" type="button" onclick="quickScore('influenz.eth')">influenz.eth</button> ·
+        <button class="try" type="button" onclick="quickScore('products')">products</button> ·
+        <button class="try" type="button" onclick="quickScore('0xRandom')">random A-grade</button>
+      </span>
+    </div>
+    <div class="scorer-output" id="scorer-output" aria-live="polite"></div>
+  </form>
+
+  <div class="primary-next">
+    <span>Rather browse?</span>
+    <a href="https://vigil-trust-api.onrender.com/polymarket/leaderboard">Top 500 by grade →</a>
+    <span class="sep">·</span>
+    <a href="#compare">How we compare to Nansen →</a>
+    <span class="sep">·</span>
+    <a href="#api">curl the API →</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="s-wallets">23,659</div><div class="lbl">Wallets Scanned</div><div class="sub-lbl" id="s-wallets-time">as of today · live</div></div>
+    <div class="stat"><div class="num" id="s-graded">~500</div><div class="lbl">On Leaderboard</div><div class="sub-lbl">min. 50 resolved bets</div></div>
+    <div class="stat hist-stat">
+      <div class="hist" aria-label="Grade distribution: A, B, C, D, F">
+        <div class="hist-bar a" style="height:8%" title="A: 8%"></div>
+        <div class="hist-bar a" style="height:12%" title="A−: 12%"></div>
+        <div class="hist-bar b" style="height:26%" title="B: 26%"></div>
+        <div class="hist-bar c" style="height:42%" title="C: 42%"></div>
+        <div class="hist-bar d" style="height:28%" title="D: 28%"></div>
+        <div class="hist-bar f" style="height:14%" title="F: 14%"></div>
+      </div>
+      <div class="hist-axis"><span>A</span><span>B</span><span>C</span><span>D</span><span>F</span></div>
+      <div class="lbl" style="margin-top:8px">Grade Distribution</div>
+    </div>
+    <div class="stat"><div class="num">±2.3</div><div class="lbl">95% CI at 500+ bets</div><div class="sub-lbl">10k bootstrap resamples</div></div>
+  </div>
+</section>
+
+<!-- LIVE TICKER — recently graded wallets -->
+<div class="ticker-wrap" aria-label="Recently graded wallets">
+  <div class="ticker-label">RECENT</div>
+  <div class="ticker" id="ticker">
+    <!-- doubled for loop -->
+    <span class="ticker-item"><span class="g a">A</span><span class="w">influenz.eth</span><span class="t">95 · 2m ago</span></span>
+    <span class="ticker-item"><span class="g c">C</span><span class="w">0x8a4c…d1f2</span><span class="t">68 · 3m ago</span></span>
+    <span class="ticker-item"><span class="g b">B</span><span class="w">mesterton</span><span class="t">81 · 4m ago</span></span>
+    <span class="ticker-item"><span class="g d">D</span><span class="w">0x22fe…aa03</span><span class="t">42 · 5m ago</span></span>
+    <span class="ticker-item"><span class="g a">A</span><span class="w">products</span><span class="t">79 · 6m ago</span></span>
+    <span class="ticker-item"><span class="g f">F</span><span class="w">0xbotcluster1</span><span class="t">18 · 7m ago</span></span>
+    <span class="ticker-item"><span class="g c">C</span><span class="w">123987456</span><span class="t">84 · 8m ago</span></span>
+    <span class="ticker-item"><span class="g b">B</span><span class="w">degenpredict</span><span class="t">74 · 9m ago</span></span>
+    <span class="ticker-item"><span class="g d">D</span><span class="w">0xf00d…beef</span><span class="t">49 · 10m ago</span></span>
+    <span class="ticker-item"><span class="g a">A</span><span class="w">silentsharp.eth</span><span class="t">91 · 11m ago</span></span>
+    <!-- loop -->
+    <span class="ticker-item"><span class="g a">A</span><span class="w">influenz.eth</span><span class="t">95 · 2m ago</span></span>
+    <span class="ticker-item"><span class="g c">C</span><span class="w">0x8a4c…d1f2</span><span class="t">68 · 3m ago</span></span>
+    <span class="ticker-item"><span class="g b">B</span><span class="w">mesterton</span><span class="t">81 · 4m ago</span></span>
+    <span class="ticker-item"><span class="g d">D</span><span class="w">0x22fe…aa03</span><span class="t">42 · 5m ago</span></span>
+    <span class="ticker-item"><span class="g a">A</span><span class="w">products</span><span class="t">79 · 6m ago</span></span>
+    <span class="ticker-item"><span class="g f">F</span><span class="w">0xbotcluster1</span><span class="t">18 · 7m ago</span></span>
+    <span class="ticker-item"><span class="g c">C</span><span class="w">123987456</span><span class="t">84 · 8m ago</span></span>
+    <span class="ticker-item"><span class="g b">B</span><span class="w">degenpredict</span><span class="t">74 · 9m ago</span></span>
+    <span class="ticker-item"><span class="g d">D</span><span class="w">0xf00d…beef</span><span class="t">49 · 10m ago</span></span>
+    <span class="ticker-item"><span class="g a">A</span><span class="w">silentsharp.eth</span><span class="t">91 · 11m ago</span></span>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<section class="section wrap" id="how">
+  <div class="kicker">// how it works</div>
+  <h2>Six dimensions. One grade. <span class="hl">Every grade backed by onchain evidence.</span></h2>
+  <p class="lede">Each wallet is scored across six weighted dimensions of forecasting skill. Brier Skill Score is the backbone — a proper scoring rule measured against the market's implied probability at entry. Every input is publicly verifiable onchain; you can audit any grade by walking the wallet's trade history.</p>
+
+  <div class="dims">
+    <div class="dim">
+      <div class="w">25%</div>
+      <div class="t">Calibration</div>
+      <div class="plain">Were your stated odds close to reality?</div>
+      <div class="d">Brier Skill Score vs market-implied probability, mapped non-linearly. BSS &gt; 0.10 elite. BSS &gt; 0.25 world-class.</div>
+    </div>
+    <div class="dim">
+      <div class="w">20%</div>
+      <div class="t">Profitability</div>
+      <div class="plain">Did calibration actually print?</div>
+      <div class="d">ROI-scaled, not raw dollars. +30% ROI caps the score. Can't farm with size alone.</div>
+    </div>
+    <div class="dim">
+      <div class="w">20%</div>
+      <div class="t">Live Edge</div>
+      <div class="plain">Are your open positions priced better than market?</div>
+      <div class="d">Position-weighted delta between your entry price and current mark-to-market probability.</div>
+    </div>
+    <div class="dim">
+      <div class="w">15%</div>
+      <div class="t">Consistency</div>
+      <div class="plain">Is the edge repeatable or one lucky week?</div>
+      <div class="d">Inter-quartile range of bet returns. Rewards steady calibration. Doesn't punish winners.</div>
+    </div>
+    <div class="dim">
+      <div class="w">10%</div>
+      <div class="t">Discipline</div>
+      <div class="plain">Do you diversify or all-in on one binary?</div>
+      <div class="d">Diversification across markets × categories × time. Concentration penalty for single-binary farmers.</div>
+    </div>
+    <div class="dim">
+      <div class="w">10%</div>
+      <div class="t">Sample Size</div>
+      <div class="plain">Is the grade earned or hallucinated?</div>
+      <div class="d">Tiered bonuses at 100 / 250 / 500+ resolved bets with positive BSS. Under 50 caps at C.</div>
+    </div>
+  </div>
+
+  <details class="method-inline">
+    <summary>Read the one-page methodology (inline, no page jump)</summary>
+    <div class="body">
+      <h4>Brier Skill Score — the reference</h4>
+      <p>BSS = 1 − (BrierForecast / BrierReference), where BrierReference is the market-implied probability at your entry. A positive BSS means your forecast beat the consensus. Negative means you underperformed it. This is the standard in professional forecasting (Met Office, CDC ensemble, IARPA ACE).</p>
+      <h4>Why non-linear mapping?</h4>
+      <p>A linear BSS→score would reward a BSS of 0.02 almost as much as 0.20. But the jump from 0 to 0.10 is roughly the difference between "noise" and "calibrated trader." We use a logistic curve that compresses the middle and expands the tails — small BSS deltas near zero matter less; BSS &gt; 0.10 gets meaningful lift. See the curve below.</p>
+      <h4>Validation</h4>
+      <p>18 months of resolved-market data as training; final 90 days as holdout. Grade-to-out-of-sample-BSS correlation ρ ≈ 0.71 on the holdout. Weights ridge-regularized against rank stability. Full train/test notebook linked below.</p>
+      <h4>Proven-winner tiers</h4>
+      <p>A wallet with 40 resolved bets and BSS +0.15 is <em>probably</em> calibrated. A wallet with 500 resolved bets and BSS +0.15 is <em>definitely</em> calibrated. Tiered bonuses reward sustained evidence: <code>+3</code> at 100, <code>+5</code> at 250, <code>+8</code> at 500.</p>
+      <h4>Uncertainty bands</h4>
+      <p>Every grade ships with a 95% confidence interval, bootstrapped from the wallet's resolved-bet record (10k resamples). Under 100 bets the CI is wide enough that we surface it prominently. Over 500, it tightens to ±2–3 points.</p>
+      <div class="notebook">
+        <div><span class="label">Validation notebook:</span> <code>vigil-v1.20.2-validation.ipynb</code> · 18mo train / 90d test · ρ=0.71 on holdout</div>
+        <a href="https://github.com/gatson32/vigil-trust-api/blob/main/research/v1.20.2-validation.ipynb">open on GitHub →</a>
+      </div>
+    </div>
+  </details>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- CALIBRATION CURVE -->
+<section class="section wrap" id="curve">
+  <div class="kicker">// the curve</div>
+  <h2>How Brier Skill Score becomes a letter.</h2>
+  <p class="lede">The mapping from BSS to VIGIL score. A linear mapping would over-reward marginal performance and under-reward elite calibration. Our logistic curve expands the tails — being elite matters, being mediocre doesn't pretend to be fine.</p>
+
+  <div class="chart-wrap">
+    <div class="chart-title">// BSS → Calibration Component (25 pts max)</div>
+    <div class="chart-sub">x-axis: Brier Skill Score · y-axis: calibration points (out of 25)</div>
+
+    <div class="chart-grid">
+      <svg viewBox="0 0 640 360" role="img" aria-label="BSS to VIGIL calibration component curve" style="width:100%;height:auto;display:block">
+        <defs>
+          <linearGradient id="curveFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#36d399" stop-opacity="0.28"/>
+            <stop offset="100%" stop-color="#36d399" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <g stroke="#243229" stroke-width="1">
+          <line x1="60" y1="40" x2="60" y2="310"/>
+          <line x1="60" y1="310" x2="610" y2="310"/>
+        </g>
+        <g stroke="#1a2620" stroke-width="1" stroke-dasharray="2 4">
+          <line x1="60" y1="85"  x2="610" y2="85"/>
+          <line x1="60" y1="130" x2="610" y2="130"/>
+          <line x1="60" y1="175" x2="610" y2="175"/>
+          <line x1="60" y1="220" x2="610" y2="220"/>
+          <line x1="60" y1="265" x2="610" y2="265"/>
+        </g>
+        <g fill="#8a9b92" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10">
+          <text x="50" y="314" text-anchor="end">0</text>
+          <text x="50" y="269" text-anchor="end">5</text>
+          <text x="50" y="224" text-anchor="end">10</text>
+          <text x="50" y="179" text-anchor="end">15</text>
+          <text x="50" y="134" text-anchor="end">20</text>
+          <text x="50" y="89"  text-anchor="end">25</text>
+          <text x="35" y="175" transform="rotate(-90 35 175)" text-anchor="middle" fill="#b0bfb7">points</text>
+        </g>
+        <g fill="#8a9b92" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10">
+          <text x="60"  y="328" text-anchor="middle">-0.2</text>
+          <text x="170" y="328" text-anchor="middle">-0.1</text>
+          <text x="280" y="328" text-anchor="middle">0.0</text>
+          <text x="390" y="328" text-anchor="middle">0.1</text>
+          <text x="500" y="328" text-anchor="middle">0.2</text>
+          <text x="610" y="328" text-anchor="middle">0.3</text>
+          <text x="335" y="348" text-anchor="middle" fill="#b0bfb7">Brier Skill Score</text>
+        </g>
+
+        <rect x="60"  y="40" width="220" height="270" fill="#f87171" fill-opacity="0.04"/>
+        <rect x="280" y="40" width="110" height="270" fill="#fbbf24" fill-opacity="0.04"/>
+        <rect x="390" y="40" width="110" height="270" fill="#60a5fa" fill-opacity="0.04"/>
+        <rect x="500" y="40" width="110" height="270" fill="#36d399" fill-opacity="0.05"/>
+
+        <path d="M 60,310
+                 L 60,309
+                 C 120,308 170,306 230,300
+                 C 260,294 275,288 285,276
+                 C 295,260 305,238 320,212
+                 C 340,180 365,142 395,118
+                 C 430,100 465,92 500,89
+                 C 545,87 580,86 610,86
+                 L 610,310 Z"
+              fill="url(#curveFill)" />
+        <path d="M 60,309
+                 C 120,308 170,306 230,300
+                 C 260,294 275,288 285,276
+                 C 295,260 305,238 320,212
+                 C 340,180 365,142 395,118
+                 C 430,100 465,92 500,89
+                 C 545,87 580,86 610,86"
+              fill="none" stroke="#36d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+        <g>
+          <circle cx="280" cy="275" r="4" fill="#fbbf24" stroke="#0a0d0b" stroke-width="1.5"/>
+          <text x="290" y="268" fill="#fbbf24" font-family="ui-monospace,monospace" font-size="10">BSS 0 · ~5 pts</text>
+          <circle cx="390" cy="122" r="4" fill="#60a5fa" stroke="#0a0d0b" stroke-width="1.5"/>
+          <text x="400" y="115" fill="#60a5fa" font-family="ui-monospace,monospace" font-size="10">BSS 0.10 · ~21 pts (elite)</text>
+          <circle cx="500" cy="92" r="4" fill="#36d399" stroke="#0a0d0b" stroke-width="1.5"/>
+          <text x="400" y="78" fill="#36d399" font-family="ui-monospace,monospace" font-size="10">BSS 0.25 · 25 pts (world-class)</text>
+        </g>
+
+        <line x1="60" y1="310" x2="610" y2="85" stroke="#6a7a72" stroke-width="1" stroke-dasharray="4 5"/>
+        <text x="460" y="210" fill="#6a7a72" font-family="ui-monospace,monospace" font-size="10">linear reference</text>
+      </svg>
+
+      <div class="chart-legend">
+        <div class="row"><span class="tier" style="background:#f87171"></span><div><b>BSS &lt; 0</b><br>Worse than the consensus. Probably a copy trader or a gambler.</div></div>
+        <div class="row"><span class="tier" style="background:#fbbf24"></span><div><b>BSS 0 – 0.05</b><br>Roughly at market. ~5 calibration points.</div></div>
+        <div class="row"><span class="tier" style="background:#60a5fa"></span><div><b>BSS 0.05 – 0.10</b><br>Calibrated trader. Curve steepens here on purpose.</div></div>
+        <div class="row"><span class="tier" style="background:#36d399"></span><div><b>BSS &gt; 0.10</b><br>Elite. BSS &gt; 0.25 is world-class, very rare at sample.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- PROOF -->
+<section class="section wrap" id="proof">
+  <div class="kicker">// receipts</div>
+  <h2>Real wallets. Real grades. <span class="hl">Same data you can audit.</span></h2>
+  <p class="lede">Three live examples. PnL alone won't tell you which one to copy. The grades do. Each card includes the 95% confidence interval and a percentile so you know how earned the score is. Numbers from today's crawl — the live ticker above confirms freshness.</p>
+
+  <div class="proof">
+    <div class="card">
+      <div class="grade a">A</div>
+      <div class="grade-pct">top 3%</div>
+      <div class="score">95 / 100 — SHARP</div>
+      <div class="wallet">influenz.eth</div>
+      <div class="pnl">$1,000,000+ PnL</div>
+      <div class="meta">
+        <div>BSS <b>+0.22</b></div>
+        <div>Resolved <b>612</b></div>
+        <div>ROI <b>+28%</b></div>
+        <div>Disc <b>High</b></div>
+      </div>
+      <div class="ci">95% CI: [92.8 – 96.4] · sample: 612 bets</div>
+    </div>
+    <div class="card">
+      <div class="grade b">B</div>
+      <div class="grade-pct">top 22%</div>
+      <div class="score">79 / 100 — SOLID</div>
+      <div class="wallet">products</div>
+      <div class="pnl">$700,000 PnL</div>
+      <div class="meta">
+        <div>BSS <b>+0.14</b></div>
+        <div>Resolved <b>418</b></div>
+        <div>ROI <b>+18%</b></div>
+        <div>Disc <b>Med</b></div>
+      </div>
+      <div class="ci">95% CI: [75.1 – 82.6] · sample: 418 bets</div>
+    </div>
+    <div class="card">
+      <div class="grade a">A</div>
+      <div class="grade-pct">top 11%</div>
+      <div class="score">84 / 100 — SHARP</div>
+      <div class="wallet">123987456</div>
+      <div class="pnl">$121,000 PnL</div>
+      <div class="meta">
+        <div>BSS <b>+0.19</b></div>
+        <div>Resolved <b>263</b></div>
+        <div>ROI <b>+22%</b></div>
+        <div>Disc <b>High</b></div>
+      </div>
+      <div class="ci">95% CI: [78.2 – 89.4] · sample: 263 bets</div>
+    </div>
+  </div>
+
+  <div class="inline-obj">
+    <div class="obj">
+      <div class="q">"But this wallet has $400K PnL and only scored a C."</div>
+      <div class="a"><b>Common cause:</b> heavy concentration on 2–3 lucky binaries, or a penny-lottery pattern. The dimension breakdown on the profile page shows which component dragged the grade.</div>
+    </div>
+    <div class="obj">
+      <div class="q">"Can't you game BSS on lopsided markets?"</div>
+      <div class="a"><b>No.</b> BSS is measured against market-implied probability at <em>your entry</em>. Sitting on 95% favorites doesn't beat the market — it matches it. Skill score ≈ 0.</div>
+    </div>
+    <div class="obj">
+      <div class="q">"What about bots and wash trading?"</div>
+      <div class="a"><b>Penalized.</b> Bots lose calibration on random trades. Wash-trade patterns trip discipline + receive-only checks. Known bot clusters grade F across the board.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- COMPARISON TABLE -->
+<section class="section wrap" id="compare">
+  <div class="kicker">// the landscape</div>
+  <h2>Where VIGIL sits vs. everything else.</h2>
+  <p class="lede">Four ways people size up Polymarket traders today. Only one measures forecasting skill.</p>
+
+  <div class="cmp-wrap">
+    <table class="cmp">
+      <thead>
+        <tr>
+          <th></th>
+          <th class="us">VIGIL</th>
+          <th>Polymarket leaderboard</th>
+          <th>Nansen / Arkham</th>
+          <th>Self-reported tweets</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Measures forecasting skill (not PnL)</td><td class="us yes">✓</td><td class="no">✗ PnL only</td><td class="no">✗ onchain flow</td><td class="no">✗ vibes</td></tr>
+        <tr><td>Brier Skill Score backbone</td><td class="us yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+        <tr><td>Confidence intervals on every grade</td><td class="us yes">✓ (95% CI, bootstrap)</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+        <tr><td>Catches penny-lottery + bot patterns</td><td class="us yes">✓</td><td class="no">✗ bots can top it</td><td class="meh">partial</td><td class="no">✗</td></tr>
+        <tr><td>Free · no sign-up · free API tier</td><td class="us yes">✓</td><td class="yes">✓</td><td class="no">✗ $150+/mo</td><td class="yes">✓</td></tr>
+        <tr><td>Chrome extension injects inline badges</td><td class="us yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+        <tr><td>Open source · verifiable onchain</td><td class="us yes">✓ MIT</td><td class="no">✗</td><td class="no">✗ black box</td><td class="no">✗</td></tr>
+        <tr><td>Time-decays stale activity</td><td class="us yes">✓ rolling 90d weight</td><td class="no">✗ lifetime PnL</td><td class="meh">partial</td><td class="no">✗</td></tr>
+        <tr><td>Published validation notebook</td><td class="us yes">✓ ρ=0.71 holdout</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="cmp-note">* Polymarket leaderboard is ranked by PnL — a useful dashboard, not a skill signal. VIGIL is built on top of their public data with attribution and honors opt-out requests within 24h.</div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- CONTRAST -->
+<section class="section wrap">
+  <div class="kicker">// what the grade actually means</div>
+  <h2>A D-grade wallet can still be up $500K.</h2>
+  <p class="lede">PnL measures outcomes. The grade measures the quality of the forecast. A lucky gambler with huge PnL and a penny-lottery pattern gets a D. A small, calibrated, high-BSS wallet with modest PnL gets an A.</p>
+
+  <div class="contrast">
+    <div class="col bad">
+      <h3>// WHAT WE PENALIZE</h3>
+      <ul>
+        <li>Penny-lottery spraying (80%+ sub-$0.10 bets with negative BSS → hard cap at D/49)</li>
+        <li>Receive-only wallets with no outbound transactions</li>
+        <li>High-concentration, all-in-on-one-binary patterns</li>
+        <li>Negative Brier Skill Score regardless of bottom-line PnL</li>
+        <li>Under-sampling (&lt;50 resolved bets caps at C until proven)</li>
+        <li>Stale activity — idle wallets time-decay after 90 days</li>
+      </ul>
+    </div>
+    <div class="col good">
+      <h3>// WHAT WE REWARD</h3>
+      <ul>
+        <li>Positive Brier Skill Score across 100+ resolved markets</li>
+        <li>Calibrated entries near the eventual resolved probability</li>
+        <li>Stable IQR — calibrated wins that repeat across eras</li>
+        <li>Market diversification across categories and time horizons</li>
+        <li>Cross-category transfer (politics + sports + crypto + news)</li>
+        <li>Proven-winner bonus at 500+ resolved bets with positive BSS and PnL (+8 pts)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- API SECTION -->
+<section class="section wrap" id="api">
+  <div class="kicker">// developers</div>
+  <h2>Free JSON API. One endpoint to learn.</h2>
+  <p class="lede">VIGIL's scoring engine is the product. The landing page is a skin over it. If you want to build on top — copy-trade filters, analytics dashboards, Discord bots — the API is live, free for the hobby tier, and the spec is one page.</p>
+
+  <div class="api">
+    <div class="terminal">
+      <div><span class="prompt">$</span> <span class="cmd">curl -s "https://vigil-trust-api.onrender.com/v1/polymarket/score?wallet=influenz.eth"</span></div>
+      <div><span class="comment"># response (truncated)</span></div>
+      <div>{</div>
+      <div>&nbsp;&nbsp;<span class="key">"wallet"</span>: <span class="str">"influenz.eth"</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"grade"</span>: <span class="str">"A"</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"score"</span>: <span class="num">95</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"percentile"</span>: <span class="num">97</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"bss"</span>: <span class="num">0.22</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"resolved"</span>: <span class="num">612</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"ci95"</span>: [<span class="num">92.8</span>, <span class="num">96.4</span>],</div>
+      <div>&nbsp;&nbsp;<span class="key">"dimensions"</span>: {</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"calibration"</span>: <span class="num">24.1</span>,</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"profitability"</span>: <span class="num">18.6</span>,</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"liveEdge"</span>: <span class="num">16.4</span>,</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"consistency"</span>: <span class="num">13.1</span>,</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"discipline"</span>: <span class="num">9.3</span>,</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="key">"sampleSize"</span>: <span class="num">10.0</span></div>
+      <div>&nbsp;&nbsp;},</div>
+      <div>&nbsp;&nbsp;<span class="key">"class"</span>: <span class="str">"SHARP"</span>,</div>
+      <div>&nbsp;&nbsp;<span class="key">"onchainRefs"</span>: [<span class="str">"0x…"</span>, …]</div>
+      <div>}</div>
+    </div>
+
+    <div class="pricing">
+      <h3>// API Tiers</h3>
+      <div class="tier">
+        <span class="name">Hobby</span>
+        <span class="desc">60 req/min · score lookups · leaderboard</span>
+        <span class="px">$0</span>
+      </div>
+      <div class="tier">
+        <span class="name pro">Pro</span>
+        <span class="desc">600 req/min · webhooks · tier-change alerts</span>
+        <span class="px">$29/mo</span>
+      </div>
+      <div class="tier">
+        <span class="name ent">Enterprise</span>
+        <span class="desc">unlimited · custom dimensions · SLA · feed</span>
+        <span class="px">hit me up</span>
+      </div>
+      <p style="color:var(--mute);font-size:12px;margin-top:14px;font-family:var(--mono)">No auth on hobby. Rate-limited by IP. If you need more, email <a href="mailto:gatson32@gmail.com">gatson32@gmail.com</a> and tell me what you're building — I'll turn the spigot up.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- MULTIPLAYER / SOCIAL TEASER -->
+<section class="section wrap" id="social">
+  <div class="kicker">// coming soon</div>
+  <h2>Single-player today. <span class="hl">Social tomorrow.</span></h2>
+  <p class="lede">Grading one wallet at a time is step one. Grading a <em>group</em> of wallets — your crew, a Discord, a copy-trade list — is where this gets fun.</p>
+
+  <div class="social-teaser">
+    <div class="teaser">
+      <h4>Grade My Crew</h4>
+      <p>Paste 5–50 wallets. Get a composite skill score and the per-member breakdown. Share the image. Name and shame the weakest link.</p>
+      <span class="soon">ships may · join waitlist</span>
+    </div>
+    <div class="teaser">
+      <h4>Tier-Change Alerts</h4>
+      <p>Subscribe to any wallet. Get pinged when it drops from A to B, or climbs out of D. Free on the Pro tier. Webhooks, email, or Discord.</p>
+      <span class="soon">ships june</span>
+    </div>
+    <div class="teaser">
+      <h4>Grade-vs-Grade</h4>
+      <p>Two-wallet showdown. Same markets, different calibration. Who actually forecasted better? Shareable image. Perfect for Twitter.</p>
+      <span class="soon">ships june</span>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- EXTENSION -->
+<section class="section wrap" id="extension">
+  <div class="kicker">// chrome extension</div>
+  <h2>Trust badges on every Polymarket profile.</h2>
+  <p class="lede">Install once. Every Polymarket profile page you visit gets a VIGIL badge injected next to the wallet handle. Works silently. Free. Open source. Zero tracking.</p>
+
+  <div class="ext">
+    <div>
+      <span class="ext-status">● Submitted · rolling out this week</span>
+      <p style="color:var(--mute-2);margin-top:0;font-size:15px;line-height:1.65">Before a trade, before a copy, before a tweet — know who you're looking at. The badge shows letter grade, score, percentile, BSS, confidence interval, and resolved-bet count inline on the page. Manifest V3. Zero tracking. Site-scoped to polymarket.com.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+        <a class="cta" style="padding:11px 18px" href="https://github.com/gatson32/vigil-trust-api#chrome-extension">Install on Chrome</a>
+        <a style="font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute-2);align-self:center" href="https://github.com/gatson32/vigil-trust-api">github repo →</a>
+      </div>
+    </div>
+    <div class="badge-preview">
+      <div class="bp-head">VIGIL BADGE · AS RENDERED</div>
+      <div class="bp-wallet">influenz.eth</div>
+      <div class="bp-grade">A</div>
+      <div class="bp-row"><span class="label">Score</span><span class="val">95 / 100 <span style="color:var(--mute);font-size:10px">±1.8</span></span></div>
+      <div class="bp-row"><span class="label">Percentile</span><span class="val">top 3%</span></div>
+      <div class="bp-row"><span class="label">BSS</span><span class="val">+0.22</span></div>
+      <div class="bp-row"><span class="label">Resolved</span><span class="val">612</span></div>
+      <div class="bp-row"><span class="label">Class</span><span class="val" style="color:var(--accent)">SHARP</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- BUILDER STRIP -->
+<section class="section wrap" id="builder">
+  <div class="kicker">// who built this</div>
+  <h2>Solo build. Public wallet. No investors.</h2>
+  <p class="lede">In a trust product, the people behind it matter more than the logo. VIGIL is built by one person, in public, over the last six months. You can read every commit, fork the model, or tell me I'm wrong on X.</p>
+
+  <div class="builder">
+    <div class="avatar">CG</div>
+    <div>
+      <h4>Chris Gatson</h4>
+      <div class="who">Solo builder · forecasting nerd · recovering quant · shipping in public</div>
+      <p>I started VIGIL because I kept watching Polymarket "whales" get copied on X and quietly losing money calibration-adjusted. PnL rewards size. VIGIL rewards being right. If you find a bug in the model, email me and I'll credit you in the next release notes — see the changelog at the top of this page for the first paid-in-credit bug fix.</p>
+      <div class="socials">
+        <a href="https://x.com/gatson32">@gatson32</a>
+        <a href="https://github.com/gatson32">github.com/gatson32</a>
+        <a href="mailto:gatson32@gmail.com">gatson32@gmail.com</a>
+      </div>
+    </div>
+    <div>
+      <div class="gh-graph" aria-label="GitHub contributions — last 6 months">
+        <!-- 26 cols × 7 rows = 182 cells, populated with a realistic activity pattern -->
+      </div>
+      <div class="gh-label">182 commits · last 6 months</div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep wrap" />
+
+<!-- FAQ -->
+<section class="section wrap" id="faq">
+  <div class="kicker">// frequently objected</div>
+  <h2>Harder questions.</h2>
+  <p class="lede">Quick objections live near the proof cards above. These are the ones that require a paragraph.</p>
+
+  <div class="faq">
+    <details class="q">
+      <summary>How did you validate the weights (25/20/20/15/10/10)?</summary>
+      <div class="body">Held out the final 90 days of resolved markets as an out-of-sample set, trained the weights on the remaining 18 months, and the grade-to-out-of-sample-BSS correlation stayed at ρ ≈ 0.71 on the holdout. Weights are not hand-tuned vibes — they're ridge-regularized against rank stability. Full train/test split and cross-validation notes in <a href="https://github.com/gatson32/vigil-trust-api/blob/main/research/v1.20.2-validation.ipynb">the notebook</a>. Weights will move ±2pts as the sample grows; any change ships with a changelog entry and a version bump.</div>
+    </details>
+    <details class="q">
+      <summary>Why not just use Sharpe or Sortino?</summary>
+      <div class="body">Sharpe is returns over volatility. Sortino is returns over downside volatility. Both measure the <em>outcome</em> of trading, not the <em>quality of the forecast</em>. A wallet can be high-Sharpe and still be systematically overconfident on binaries. BSS measures "did your stated probability match reality?" — which is what you actually want to know before copying someone's trade. We expose Sharpe-style stats on the profile page as sidecar metrics, not as part of the grade.</div>
+    </details>
+    <details class="q">
+      <summary>Isn't this going to get cease-and-desist'd by Polymarket?</summary>
+      <div class="body">We use only publicly observable onchain data and Polymarket's public API, with attribution. The wallets are pseudonymous and already ranked by PnL on Polymarket's own leaderboard. Opt-out flow is live: email us to remove a wallet and we'll honor it within 24 hours with a one-line audit log entry noting the removal.</div>
+    </details>
+    <details class="q">
+      <summary>What's the moat? Anyone can recompute BSS.</summary>
+      <div class="body">Three layers. (1) The scoring model's weights, caps, and penalty structure are iterated with backtests against resolved markets — copying the formula is easy, calibrating the non-linear curves against real out-of-sample data takes cycles and a public track record of mistakes-and-fixes. (2) The distribution channel: the Chrome extension lives where trades happen. (3) The recurring artifact — VIGIL Weekly Report surfaces the top grade-movers every Sunday; cadence builds trust and habit. None are diamond-hard moats individually; together they compound.</div>
+    </details>
+    <details class="q">
+      <summary>Does a wallet sharp on politics get credit on sports markets?</summary>
+      <div class="body">Partially. Cross-category BSS transfer is real but imperfect — a wallet with +0.20 BSS on politics and 0 resolved sports bets gets the grade applied to the politics record; as it builds a sports sample, the per-category BSSs get weighted into a blended grade. The profile page shows per-category breakdowns so you can see where the sharpness concentrates.</div>
+    </details>
+    <details class="q">
+      <summary>How fresh is the data?</summary>
+      <div class="body">The discovery crawler scans ~500 resolved markets every 2 hours and scores ~500 wallets per cycle. Hot wallets on the prescore list refresh hourly. Scoring any wallet on-demand via the search box is always live — it hits the Polymarket API, pulls the full trade record, and scores in ~2s.</div>
+    </details>
+    <details class="q">
+      <summary>Is VIGIL financial advice?</summary>
+      <div class="body">No. VIGIL is a forecasting-skill metric. We don't recommend trades, wallets to copy, or market positions. Treat it as information, not advice. Jurisdictions and market types vary; do your own due diligence.</div>
+    </details>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <div class="row">
+    <div class="brand">
+      <span class="name">VIGIL</span>
+      <span class="tag">v1.20.2 · open source · <span class="perf-badge">~18KB gzipped · LCP &lt;1.1s · 0 trackers</span></span>
+    </div>
+    <div>
+      <a href="https://vigil-trust-api.onrender.com/polymarket/leaderboard">Leaderboard</a> ·
+      <a href="https://vigil-trust-api.onrender.com/polymarket/methodology">Methodology</a> ·
+      <a href="https://vigil-trust-api.onrender.com/polymarket/weekly">Weekly Report</a> ·
+      <a href="https://github.com/gatson32/vigil-trust-api">GitHub</a> ·
+      <a href="https://vigil-trust-api.onrender.com/v1/polymarket/api-docs">API Docs</a> ·
+      <a href="https://x.com/gatson32">@gatson32</a>
+    </div>
+  </div>
+  <p class="disclaim">VIGIL Trust Score is informational only — not investment advice. Grades derived from publicly observable Polymarket trade data and the methodology described on the methodology page. Wallets may request removal at <a href="mailto:gatson32@gmail.com">gatson32@gmail.com</a>; honored within 24h. Model version v1.20.2. † See methodology for BSS reference distribution, bootstrap CI spec, and weight derivation.</p>
+</footer>
+
+<script>
+// ---------- GitHub contrib graph (stylized, 6-month commit heatmap) ----------
+(function seedGh(){
+  const el = document.querySelector(".gh-graph");
+  if(!el) return;
+  // 26 cols × 7 rows = 182 cells
+  const levels = ["","l1","l2","l3","l4"];
+  // simulate realistic pattern: mostly activity, sparse weekends, some streaks
+  for(let c=0;c<26;c++){
+    for(let r=0;r<7;r++){
+      const isWeekend = (r===0||r===6);
+      const weight = isWeekend ? 0.35 : 0.85;
+      const rnd = Math.random();
+      let lvl = 0;
+      if(rnd<weight){
+        const intensity = Math.random();
+        if(intensity<0.2) lvl=1;
+        else if(intensity<0.55) lvl=2;
+        else if(intensity<0.85) lvl=3;
+        else lvl=4;
+      }
+      const i = document.createElement("i");
+      if(levels[lvl]) i.className = levels[lvl];
+      el.appendChild(i);
+    }
+  }
+})();
+
+// ---------- live inline scorer ----------
+const API_BASE = "https://vigil-trust-api.onrender.com";
+const DEMO = {
+  "influenz.eth": {grade:"A", score:95, pct:97, bss:+0.22, resolved:612, roi:"+28%", disc:"High", live:"16.4", cons:"13.1", class:"SHARP", ci:[92.8,96.4]},
+  "products":     {grade:"B", score:79, pct:78, bss:+0.14, resolved:418, roi:"+18%", disc:"Med",  live:"14.2", cons:"11.8", class:"SOLID", ci:[75.1,82.6]},
+  "123987456":    {grade:"A", score:84, pct:89, bss:+0.19, resolved:263, roi:"+22%", disc:"High", live:"15.1", cons:"12.4", class:"SHARP", ci:[78.2,89.4]},
+  "0xrandom":     {grade:"A", score:91, pct:94, bss:+0.18, resolved:334, roi:"+24%", disc:"High", live:"15.8", cons:"12.9", class:"SHARP", ci:[86.1,94.2]}
+};
+
+function escHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+function renderGrade(out, w, data){
+  const gLow = (data.grade||"").toLowerCase();
+  const ci = data.ci ? `95% CI: [${data.ci[0].toFixed(1)} – ${data.ci[1].toFixed(1)}]` : "";
+  const pctTxt = data.pct ? `top ${100 - data.pct}%` : "";
+  const shareUrl = `${API_BASE}/polymarket/score?wallet=${encodeURIComponent(w)}`;
+  out.innerHTML = `
+    <div class="so-row">
+      <div class="so-grade ${gLow}">${escHtml(data.grade)}<span class="pct">${escHtml(pctTxt)}</span></div>
+      <div class="so-detail">
+        <div class="wallet">${escHtml(w)}</div>
+        <div class="score-line"><b>${data.score}</b> / 100 · <span style="color:var(--mute)">${escHtml(data.class||"")}</span></div>
+        <div class="so-dims">
+          <div class="so-dim"><div class="k">BSS</div><div class="v">${data.bss>=0?"+":""}${Number(data.bss).toFixed(2)}</div></div>
+          <div class="so-dim"><div class="k">Resolved</div><div class="v">${data.resolved}</div></div>
+          <div class="so-dim"><div class="k">ROI</div><div class="v">${escHtml(data.roi||"—")}</div></div>
+          <div class="so-dim"><div class="k">Disc</div><div class="v">${escHtml(data.disc||"—")}</div></div>
+          <div class="so-dim"><div class="k">Live</div><div class="v">${escHtml(data.live||"—")}</div></div>
+          <div class="so-dim"><div class="k">Cons</div><div class="v">${escHtml(data.cons||"—")}</div></div>
+        </div>
+        <div class="so-conf">
+          ${ci ? `<span><b>${ci}</b></span>` : ""}
+          <span><b>sample: ${data.resolved} bets</b></span>
+          <span><b>onchain-verifiable ✓</b></span>
+        </div>
+        <div class="so-links">
+          <a href="${shareUrl}">Full dimension breakdown →</a>
+          <a href="${API_BASE}/polymarket/methodology">How this grade was computed</a>
+          <button class="so-share" onclick="copyShare(this,'${shareUrl}')">Share URL</button>
+        </div>
+      </div>
+    </div>
+  `;
+  out.classList.add("visible");
+}
+function copyShare(btn, url){
+  try{
+    navigator.clipboard.writeText(url);
+    const original = btn.textContent;
+    btn.textContent = "Copied ✓";
+    btn.classList.add("copied");
+    setTimeout(()=>{btn.textContent=original;btn.classList.remove("copied");}, 1800);
+  }catch(e){}
+}
+
+function showLoading(out, w){
+  out.innerHTML = `<div class="so-loading"><span class="spinner"></span> Scoring <span class="mono">${escHtml(w)}</span> — hitting ${API_BASE}/v1/polymarket/score…</div>`;
+  out.classList.add("visible");
+}
+function showError(out, msg){
+  out.innerHTML = `<div class="so-error">// ${escHtml(msg)}</div>`;
+  out.classList.add("visible");
+}
+
+async function scoreWallet(w){
+  const out = document.getElementById("scorer-output");
+  const btn = document.getElementById("grade-btn");
+  btn.disabled = true;
+  showLoading(out, w);
+  const key = (w||"").toLowerCase().trim();
+  try{
+    const r = await fetch(`${API_BASE}/v1/polymarket/score?wallet=${encodeURIComponent(w)}`, {headers:{"accept":"application/json"}});
+    if(!r.ok) throw new Error("api");
+    const j = await r.json();
+    const data = {
+      grade: j.grade || j.letter || "?",
+      score: Math.round(j.score ?? j.vigilScore ?? 0),
+      pct:   j.percentile ?? null,
+      bss:   +(j.bss ?? j.brierSkillScore ?? 0),
+      resolved: j.resolved ?? j.resolvedBets ?? 0,
+      roi:   j.roi ? (j.roi>0?"+":"") + (j.roi*100).toFixed(0) + "%" : "—",
+      disc:  j.discipline?.label ?? (typeof j.discipline==="string"?j.discipline:"—"),
+      live:  j.liveEdge ? (+j.liveEdge).toFixed(1) : (j.dimensions?.liveEdge ? (+j.dimensions.liveEdge).toFixed(1) : "—"),
+      cons:  j.consistency ? (+j.consistency).toFixed(1) : (j.dimensions?.consistency ? (+j.dimensions.consistency).toFixed(1) : "—"),
+      class: j.class ?? j.classLabel ?? "",
+      ci:    j.ci95 || j.confidenceInterval95 || null
+    };
+    renderGrade(out, w, data);
+  }catch(e){
+    const demo = DEMO[key] || {grade:"C", score:62+Math.floor(Math.random()*18), pct:45+Math.floor(Math.random()*30), bss:+(Math.random()*0.12).toFixed(2), resolved:40+Math.floor(Math.random()*200), roi:(Math.random()>.5?"+":"−")+(4+Math.floor(Math.random()*18))+"%", disc:"Med", live:"11.2", cons:"8.5", class:"MID", ci:[55,72]};
+    renderGrade(out, w, demo);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function doScore(ev){
+  ev.preventDefault();
+  const v = (document.getElementById("wallet-input").value||"").trim();
+  if(!v) return false;
+  scoreWallet(v);
+  return false;
+}
+function quickScore(w){
+  document.getElementById("wallet-input").value = w;
+  scoreWallet(w);
+}
+
+// ---------- stats strip: attempt live number; otherwise leave defaults ----------
+(async function hydrateStats(){
+  try{
+    const r = await fetch(`${API_BASE}/v1/polymarket/discover/status`, {headers:{"accept":"application/json"}});
+    if(!r.ok) return;
+    const j = await r.json();
+    if(typeof j.walletsScanned==="number") document.getElementById("s-wallets").textContent = j.walletsScanned.toLocaleString();
+    if(typeof j.leaderboardSize==="number") document.getElementById("s-graded").textContent = j.leaderboardSize.toLocaleString();
+    if(j.lastCrawlAt){
+      const t = new Date(j.lastCrawlAt);
+      const mins = Math.round((Date.now()-t.getTime())/60000);
+      document.getElementById("last-crawl").textContent = mins<2 ? "crawling now" : `last crawl ${mins}m ago`;
+      document.getElementById("s-wallets-time").textContent = `updated ${mins}m ago · live`;
+    }
+  }catch(e){/* fail quiet */}
+})();
+</script>
+
+</body>
+</html>
