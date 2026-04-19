@@ -46,8 +46,10 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
-a{color:var(--accent);text-decoration:none}
-a:hover{text-decoration:underline}
+a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{text-decoration-thickness:2px}
+.bar .links a,.bar .cta,.so-links a,.builder .socials a,.primary-next a,.teaser a{text-decoration:none}
+.bar .links a:hover,.so-links a:hover,.builder .socials a:hover{text-decoration:underline}
 code,.mono{font-family:var(--mono)}
 .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
 hr.sep{border:0;border-top:1px solid var(--line);margin:64px 0}
@@ -195,7 +197,7 @@ h1 .hl{color:var(--accent)}
 .method-inline summary::before{content:"▸";color:var(--accent);transition:transform .2s}
 .method-inline[open] summary::before{transform:rotate(90deg)}
 .method-inline .body{padding:0 22px 22px;color:var(--mute-2);font-size:14px;line-height:1.7}
-.method-inline .body h4{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase;margin:18px 0 6px}
+.method-inline .body h3{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase;margin:18px 0 6px;font-weight:600}
 .method-inline .body code{background:#0c110e;padding:2px 6px;border-radius:2px;font-size:13px;color:var(--accent)}
 .method-inline .notebook{margin-top:16px;background:#0c110e;border:1px solid var(--line-2);border-radius:3px;padding:14px 16px;font-family:var(--mono);font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .method-inline .notebook .label{color:var(--mute)}
@@ -294,14 +296,14 @@ table.cmp tr:hover td.us{background:rgba(54,211,153,.08)}
 .social-teaser{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:10px}
 .teaser{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:24px;transition:border-color .2s, transform .2s}
 .teaser:hover{border-color:var(--line-2);transform:translateY(-2px)}
-.teaser h4{margin:0 0 8px;font-size:15px;font-family:var(--mono);letter-spacing:.05em;color:var(--ink)}
+.teaser h3{margin:0 0 8px;font-size:15px;font-family:var(--mono);letter-spacing:.05em;color:var(--ink);font-weight:600}
 .teaser p{color:var(--mute-2);font-size:13px;line-height:1.6;margin:0 0 12px}
 .teaser .soon{font-family:var(--mono);font-size:10px;color:var(--gold);letter-spacing:.15em;text-transform:uppercase}
 
 /* builder strip */
 .builder{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:28px;margin-top:12px;display:grid;grid-template-columns:auto 1fr auto;gap:24px;align-items:center}
 .builder .avatar{width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#1e7d57);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:28px;font-weight:700;color:#0a0d0b}
-.builder h4{margin:0 0 4px;font-size:16px}
+.builder h3{margin:0 0 4px;font-size:16px;font-weight:600}
 .builder .who{font-family:var(--mono);font-size:12px;color:var(--mute);letter-spacing:.08em;margin-bottom:10px}
 .builder p{color:var(--mute-2);font-size:14px;margin:0 0 10px;line-height:1.65;max-width:620px}
 .builder .socials{font-family:var(--mono);font-size:12px;color:var(--mute);display:flex;gap:16px;flex-wrap:wrap}
@@ -486,7 +488,7 @@ footer a:hover{color:var(--accent)}
     <div class="stat"><div class="num" id="s-wallets">23,659</div><div class="lbl">Wallets Scanned</div><div class="sub-lbl" id="s-wallets-time">as of today · live</div></div>
     <div class="stat"><div class="num" id="s-graded">~500</div><div class="lbl">On Leaderboard</div><div class="sub-lbl">min. 50 resolved bets</div></div>
     <div class="stat hist-stat">
-      <div class="hist" aria-label="Grade distribution: A, B, C, D, F">
+      <div class="hist" role="img" aria-label="Grade distribution: A, B, C, D, F">
         <div class="hist-bar a" style="height:8%" title="A: 8%"></div>
         <div class="hist-bar a" style="height:12%" title="A−: 12%"></div>
         <div class="hist-bar b" style="height:26%" title="B: 26%"></div>
@@ -502,7 +504,7 @@ footer a:hover{color:var(--accent)}
 </section>
 
 <!-- LIVE TICKER — recently graded wallets -->
-<div class="ticker-wrap" aria-label="Recently graded wallets">
+<div class="ticker-wrap" role="region" aria-label="Recently graded wallets">
   <div class="ticker-label">RECENT</div>
   <div class="ticker" id="ticker">
     <!-- doubled for loop -->
@@ -578,15 +580,15 @@ footer a:hover{color:var(--accent)}
   <details class="method-inline">
     <summary>Read the one-page methodology (inline, no page jump)</summary>
     <div class="body">
-      <h4>Brier Skill Score — the reference</h4>
+      <h3>Brier Skill Score — the reference</h3>
       <p>BSS = 1 − (BrierForecast / BrierReference), where BrierReference is the market-implied probability at your entry. A positive BSS means your forecast beat the consensus. Negative means you underperformed it. This is the standard in professional forecasting (Met Office, CDC ensemble, IARPA ACE).</p>
-      <h4>Why non-linear mapping?</h4>
+      <h3>Why non-linear mapping?</h3>
       <p>A linear BSS→score would reward a BSS of 0.02 almost as much as 0.20. But the jump from 0 to 0.10 is roughly the difference between "noise" and "calibrated trader." We use a logistic curve that compresses the middle and expands the tails — small BSS deltas near zero matter less; BSS &gt; 0.10 gets meaningful lift. See the curve below.</p>
-      <h4>Validation</h4>
+      <h3>Validation</h3>
       <p>18 months of resolved-market data as training; final 90 days as holdout. Grade-to-out-of-sample-BSS correlation ρ ≈ 0.71 on the holdout. Weights ridge-regularized against rank stability. Full train/test notebook linked below.</p>
-      <h4>Proven-winner tiers</h4>
+      <h3>Proven-winner tiers</h3>
       <p>A wallet with 40 resolved bets and BSS +0.15 is <em>probably</em> calibrated. A wallet with 500 resolved bets and BSS +0.15 is <em>definitely</em> calibrated. Tiered bonuses reward sustained evidence: <code>+3</code> at 100, <code>+5</code> at 250, <code>+8</code> at 500.</p>
-      <h4>Uncertainty bands</h4>
+      <h3>Uncertainty bands</h3>
       <p>Every grade ships with a 95% confidence interval, bootstrapped from the wallet's resolved-bet record (10k resamples). Under 100 bets the CI is wide enough that we surface it prominently. Over 500, it tightens to ±2–3 points.</p>
       <div class="notebook">
         <div><span class="label">Validation notebook:</span> <code>vigil-v1.20.2-validation.ipynb</code> · 18mo train / 90d test · ρ=0.71 on holdout</div>
@@ -896,17 +898,17 @@ footer a:hover{color:var(--accent)}
 
   <div class="social-teaser">
     <div class="teaser">
-      <h4>Grade My Crew</h4>
+      <h3>Grade My Crew</h3>
       <p>Paste 5–50 wallets. Get a composite skill score and the per-member breakdown. Share the image. Name and shame the weakest link.</p>
       <span class="soon">ships may · join waitlist</span>
     </div>
     <div class="teaser">
-      <h4>Tier-Change Alerts</h4>
+      <h3>Tier-Change Alerts</h3>
       <p>Subscribe to any wallet. Get pinged when it drops from A to B, or climbs out of D. Free on the Pro tier. Webhooks, email, or Discord.</p>
       <span class="soon">ships june</span>
     </div>
     <div class="teaser">
-      <h4>Grade-vs-Grade</h4>
+      <h3>Grade-vs-Grade</h3>
       <p>Two-wallet showdown. Same markets, different calibration. Who actually forecasted better? Shareable image. Perfect for Twitter.</p>
       <span class="soon">ships june</span>
     </div>
@@ -954,7 +956,7 @@ footer a:hover{color:var(--accent)}
   <div class="builder">
     <div class="avatar">CG</div>
     <div>
-      <h4>Chris Gatson</h4>
+      <h3>Chris Gatson</h3>
       <div class="who">Solo builder · forecasting nerd · recovering quant · shipping in public</div>
       <p>I started VIGIL because I kept watching Polymarket "whales" get copied on X and quietly losing money calibration-adjusted. PnL rewards size. VIGIL rewards being right. If you find a bug in the model, email me and I'll credit you in the next release notes — see the changelog at the top of this page for the first paid-in-credit bug fix.</p>
       <div class="socials">
@@ -964,7 +966,7 @@ footer a:hover{color:var(--accent)}
       </div>
     </div>
     <div>
-      <div class="gh-graph" aria-label="GitHub contributions — last 6 months">
+      <div class="gh-graph" role="img" aria-label="GitHub contributions — last 6 months">
         <!-- 26 cols × 7 rows = 182 cells, populated with a realistic activity pattern -->
       </div>
       <div class="gh-label">182 commits · last 6 months</div>
