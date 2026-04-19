@@ -3,7 +3,7 @@
   "name": "VIGIL Trust Score",
   "version": "1.0.0",
   "description": "See the real trust score of any Polymarket trader. Calibration, live edge, on-chain verification — before you copy-trade.",
-  "permissions": ["activeTab"],
+  "permissions": [],
   "host_permissions": [
     "https://polymarket.com/*",
     "https://vigil-trust-api.onrender.com/*"
