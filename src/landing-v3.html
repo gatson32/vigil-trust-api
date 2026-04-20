@@ -534,6 +534,83 @@ footer a:hover{color:var(--accent)}
   </div>
 </div>
 
+<!-- SKILL CONSENSUS MARQUEE (v1.21.0) -->
+<section class="section wrap" id="consensus">
+  <div class="kicker">// what does the calibrated money think?</div>
+  <h2>Skill-weighted consensus. <span class="hl">Market price vs. graded-wallet probability.</span></h2>
+  <p class="lede">Every active Polymarket market now gets a second number: the weighted implied probability from every A/B/C/D wallet in our universe, stacked against the market price. When they agree, the market is efficient. When they diverge, someone is wrong.</p>
+
+  <div id="consensus-marquee" style="background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:24px;min-height:260px">
+    <div id="consensus-loading" style="color:#707070;text-align:center;padding:40px 0;font-family:'JetBrains Mono',monospace;font-size:13px">Loading top-volume market…</div>
+  </div>
+
+  <div style="margin-top:14px;font-size:12px;color:#707070;text-align:center">
+    Weighting: grade × √(stake) × exp(−days/30) · 1000-resample bootstrap CI · 5-min cache · <a href="/polymarket/consensus/methodology" style="color:#3b82f6">methodology →</a>
+  </div>
+</section>
+
+<script>
+(function(){
+  // Fetch the current top-volume active market and its consensus.
+  // We pick the first non-resolved market from the crawler's universe.
+  async function loadMarquee(){
+    const root = document.getElementById('consensus-marquee');
+    if (!root) return;
+    try {
+      // Get the top market by volume from Polymarket's gamma API (public, CORS-friendly)
+      const r = await fetch('https://gamma-api.polymarket.com/markets?closed=false&limit=1&order=volumeNum&ascending=false');
+      const markets = await r.json();
+      if (!Array.isArray(markets) || markets.length === 0) throw new Error('no markets');
+      const cid = markets[0].conditionId;
+      if (!cid) throw new Error('no conditionId');
+      const c = await fetch('/v1/polymarket/markets/' + cid + '/skill-consensus');
+      if (!c.ok) {
+        const body = await c.json().catch(() => ({}));
+        root.innerHTML = '<div style="color:#707070;text-align:center;padding:40px 20px;font-size:14px">' +
+          '<div style="font-size:15px;color:#999;margin-bottom:6px">' + (markets[0].question || 'Top market') + '</div>' +
+          '<div style="color:#f97316;font-size:13px">' + (body.message || 'Consensus not yet available for this market.') + '</div>' +
+          '<div style="margin-top:14px;font-size:12px"><a href="/polymarket/leaderboard" style="color:#3b82f6">See the skill leaderboard →</a></div>' +
+          '</div>';
+        return;
+      }
+      const d = await c.json();
+      const market = d.impliedMarketP == null ? '—' : (d.impliedMarketP * 100).toFixed(1) + '%';
+      const cons = (d.consensusP * 100).toFixed(1) + '%';
+      const divPct = d.impliedMarketP == null ? null : (d.divergence * 100).toFixed(1);
+      const divColor = d.divergenceDirection === 'aligned' ? '#707070' :
+                        Math.abs(d.divergence) > 0.15 ? '#ef4444' :
+                        Math.abs(d.divergence) > 0.07 ? '#f97316' : '#eab308';
+      const divLabel = d.divergenceDirection === 'aligned' ? 'ALIGNED' :
+                        d.divergenceDirection === 'market_overpriced' ? 'MARKET OVERPRICED' :
+                        d.divergenceDirection === 'market_underpriced' ? 'MARKET UNDERPRICED' : '—';
+      root.innerHTML =
+        '<div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:18px">' + escapeHtml(d.marketTitle || '') + '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr auto 1fr;gap:20px;align-items:center">' +
+          '<div style="text-align:center"><div style="font-size:10px;color:#707070;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Market Price</div>' +
+          '<div style="font-size:36px;font-weight:800;color:#fff;font-family:monospace">' + market + '</div></div>' +
+          '<div style="font-size:24px;color:#333;text-align:center">→</div>' +
+          '<div style="text-align:center"><div style="font-size:10px;color:#707070;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Skilled Money</div>' +
+          '<div style="font-size:36px;font-weight:800;font-family:monospace;color:' + divColor + '">' + cons + '</div>' +
+          '<div style="font-size:11px;color:#707070;margin-top:4px;font-family:monospace">95% CI: ' + (d.ci95.low*100).toFixed(1) + '–' + (d.ci95.high*100).toFixed(1) + '%</div></div>' +
+        '</div>' +
+        '<div style="text-align:center;margin-top:20px">' +
+          '<span style="display:inline-block;padding:8px 14px;border-radius:2px;font-weight:800;letter-spacing:2px;font-size:11px;border:1px solid ' + divColor + '40;background:' + divColor + '15;color:' + divColor + '">' + divLabel + (divPct != null ? ' · Δ ' + (d.divergence >= 0 ? '+' : '−') + Math.abs(Number(divPct)).toFixed(1) + 'pp' : '') + '</span>' +
+          '<div style="margin-top:8px;color:#707070;font-size:12px">' + d.contributingWallets.total + ' graded wallets · effective sample ' + d.effectiveSampleSize.toFixed(2) + ' · ' + d.dataQuality.toUpperCase() + '</div>' +
+        '</div>' +
+        '<div style="text-align:center;margin-top:18px">' +
+          '<a href="/polymarket/markets/' + cid + '/consensus" style="color:#3b82f6;text-decoration:none;font-size:13px;font-weight:600">Full breakdown →</a>' +
+        '</div>';
+    } catch(e){
+      root.innerHTML = '<div style="color:#707070;text-align:center;padding:40px 20px;font-size:13px">Consensus feed warming up — try again in a minute.<br><a href="/polymarket/leaderboard" style="color:#3b82f6;margin-top:10px;display:inline-block">See the skill leaderboard →</a></div>';
+    }
+  }
+  function escapeHtml(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  loadMarquee();
+})();
+</script>
+
+<hr class="sep wrap" />
+
 <!-- HOW IT WORKS -->
 <section class="section wrap" id="how">
   <div class="kicker">// how it works</div>

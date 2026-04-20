@@ -32,8 +32,9 @@ export const GRADE_WEIGHTS: Record<string, number> = {
 
 const DECAY_HALF_LIFE_DAYS = 30;
 
-/** Minimum effective sample size (sum of grade weights) to surface consensus. */
-const MIN_EFFECTIVE_SAMPLE = 1.0;
+/** Minimum effective sample size (sum of grade × decay weights) to surface
+ *  consensus. 0.5 ≈ "at least half an A-grade wallet's worth of signal." */
+const MIN_EFFECTIVE_SAMPLE = 0.5;
 
 /** Minimum number of distinct contributing wallets. */
 const MIN_WALLETS = 5;
@@ -276,6 +277,118 @@ async function pMap<T, R>(items: T[], fn: (item: T, idx: number) => Promise<R>, 
   return results;
 }
 
+// ─── Pure core (testable) ─────────────────────────────────────────
+
+export interface ConsensusInputs {
+  conditionId: string;
+  marketTitle: string;
+  marketSlug: string;
+  marketClosed: boolean;
+  impliedMarketP: number | null;
+  /** (leaderboardEntry, position) for every graded wallet holding this market */
+  pairs: Array<{ entry: LeaderboardEntry; position: PolymarketPosition }>;
+}
+
+/**
+ * Pure computation core — no network calls. Given leaderboard entries paired
+ * with the positions they hold in a market, produce the consensus report.
+ * Exported so tests can exercise the math without mocking fetch.
+ */
+export function computeConsensusFromPairs(input: ConsensusInputs): SkillConsensus | ConsensusError {
+  const contributors: ConsensusContributor[] = [];
+  for (const { entry, position } of input.pairs) {
+    if (!position || position.size <= 0) continue;
+    const gradeWeight = GRADE_WEIGHTS[entry.trustGrade] ?? 0;
+    if (gradeWeight <= 0) continue;
+
+    const daysSinceEntry = daysSinceEntryHeuristic(position);
+    const stakeWeight = Math.sqrt(Math.max(1, position.initialValue || 0));
+    const decay = timeDecay(daysSinceEntry);
+    const weight = gradeWeight * stakeWeight * decay;
+    const impliedPYes = impliedPYesFromPosition(position);
+    const outcome: 'Yes' | 'No' = position.outcomeIndex === 0 ? 'Yes' : 'No';
+
+    contributors.push({
+      wallet: entry.wallet,
+      displayName: entry.displayName,
+      grade: entry.trustGrade,
+      trustScore: entry.trustScore,
+      outcome,
+      size: position.size,
+      avgPrice: position.avgPrice,
+      initialValue: position.initialValue,
+      daysSinceEntry,
+      impliedPYes,
+      weight,
+    });
+  }
+
+  const gradeDecayWeights = contributors.map(c => GRADE_WEIGHTS[c.grade] * timeDecay(c.daysSinceEntry));
+  const effectiveWalletCount = gradeDecayWeights.reduce((a, b) => a + b, 0);
+
+  if (contributors.length < MIN_WALLETS || effectiveWalletCount < MIN_EFFECTIVE_SAMPLE) {
+    return {
+      error: 'INSUFFICIENT_DATA',
+      message: `Only ${contributors.length} graded wallet(s) hold positions in this market (effective weight ${effectiveWalletCount.toFixed(2)}). Need ≥${MIN_WALLETS} wallets and effective weight ≥${MIN_EFFECTIVE_SAMPLE}.`,
+      contributingWallets: contributors.length,
+      effectiveSampleSize: effectiveWalletCount,
+    };
+  }
+
+  const values = contributors.map(c => c.impliedPYes);
+  const weights = contributors.map(c => c.weight);
+  const consensusP = weightedMean(values, weights);
+  const ci95 = bootstrapCI95(values, weights, 1000);
+
+  const impliedMarketP = input.impliedMarketP;
+  const divergence = impliedMarketP != null ? consensusP - impliedMarketP : 0;
+  const divergenceDirection: SkillConsensus['divergenceDirection'] =
+    impliedMarketP == null
+      ? 'unknown'
+      : Math.abs(divergence) < 0.03
+      ? 'aligned'
+      : divergence > 0
+      ? 'market_underpriced'
+      : 'market_overpriced';
+
+  const contribBuckets = { total: contributors.length, A: 0, B: 0, C: 0, D: 0, F: 0 };
+  for (const c of contributors) {
+    contribBuckets[c.grade as keyof typeof contribBuckets] = (contribBuckets[c.grade as keyof typeof contribBuckets] ?? 0) + 1;
+  }
+
+  const topContributors = [...contributors].sort((a, b) => b.weight - a.weight).slice(0, 10);
+  const totalSkillStake = contributors.reduce((a, c) => a + (c.initialValue || 0), 0);
+
+  let dataQuality: SkillConsensus['dataQuality'] = 'insufficient';
+  if (effectiveWalletCount >= 10) dataQuality = 'strong';
+  else if (effectiveWalletCount >= 5) dataQuality = 'moderate';
+  else if (effectiveWalletCount >= MIN_EFFECTIVE_SAMPLE) dataQuality = 'weak';
+
+  const notes: string[] = [];
+  if (input.marketClosed) notes.push('Market is closed — consensus reflects positions at/before close.');
+  if (contribBuckets.A + contribBuckets.B === 0) notes.push('No A or B grade wallets in this market — consensus driven by C/D grades.');
+  if (contributors.some(c => c.initialValue > 50_000)) notes.push('Whale positions present — stake weight uses sqrt(USDC) to dampen over-influence.');
+
+  return {
+    marketId: input.conditionId,
+    marketTitle: input.marketTitle,
+    marketSlug: input.marketSlug,
+    impliedMarketP,
+    consensusP,
+    divergence,
+    divergenceDirection,
+    contributingWallets: contribBuckets,
+    gradeWeights: GRADE_WEIGHTS,
+    effectiveSampleSize: effectiveWalletCount,
+    ci95,
+    totalSkillStake,
+    topContributors,
+    asOf: new Date().toISOString(),
+    notes,
+    dataQuality,
+  };
+}
+
 // ─── Main computation ─────────────────────────────────────────────
 
 export async function computeSkillConsensus(conditionId: string): Promise<SkillConsensus | ConsensusError> {
@@ -307,104 +420,21 @@ export async function computeSkillConsensus(conditionId: string): Promise<SkillC
     };
   }
 
-  // Filter to wallets with a position on this market and non-zero grade weight
-  const contributors: ConsensusContributor[] = [];
-  for (const { entry, position } of walletPositions) {
-    if (!position || position.size <= 0) continue;
-    const gradeWeight = GRADE_WEIGHTS[entry.trustGrade] ?? 0;
-    if (gradeWeight <= 0) continue;
+  // Filter to wallets with an actual position and delegate to the pure core.
+  const pairs = walletPositions
+    .filter((wp): wp is { entry: LeaderboardEntry; position: PolymarketPosition } => !!wp.position)
+    .map(wp => ({ entry: wp.entry, position: wp.position as PolymarketPosition }));
 
-    const daysSinceEntry = daysSinceEntryHeuristic(position);
-    const stakeWeight = Math.sqrt(Math.max(1, position.initialValue || 0));
-    const decay = timeDecay(daysSinceEntry);
-    const weight = gradeWeight * stakeWeight * decay;
-    const impliedPYes = impliedPYesFromPosition(position);
-    const outcome: 'Yes' | 'No' = position.outcomeIndex === 0 ? 'Yes' : 'No';
-
-    contributors.push({
-      wallet: entry.wallet,
-      displayName: entry.displayName,
-      grade: entry.trustGrade,
-      trustScore: entry.trustScore,
-      outcome,
-      size: position.size,
-      avgPrice: position.avgPrice,
-      initialValue: position.initialValue,
-      daysSinceEntry,
-      impliedPYes,
-      weight,
-    });
-  }
-
-  const effectiveSampleSize = contributors.reduce((a, c) => a + c.weight / Math.max(1, Math.sqrt(c.initialValue || 1)), 0);
-  // ESS in "effective wallets" — strip stake weight, keep grade × decay
-  const gradeDecayWeights = contributors.map(c => GRADE_WEIGHTS[c.grade] * timeDecay(c.daysSinceEntry));
-  const effectiveWalletCount = gradeDecayWeights.reduce((a, b) => a + b, 0);
-
-  if (contributors.length < MIN_WALLETS || effectiveWalletCount < MIN_EFFECTIVE_SAMPLE) {
-    return {
-      error: 'INSUFFICIENT_DATA',
-      message: `Only ${contributors.length} graded wallet(s) hold positions in this market (effective weight ${effectiveWalletCount.toFixed(2)}). Need ≥${MIN_WALLETS} wallets and effective weight ≥${MIN_EFFECTIVE_SAMPLE}.`,
-      contributingWallets: contributors.length,
-      effectiveSampleSize: effectiveWalletCount,
-    };
-  }
-
-  const values = contributors.map(c => c.impliedPYes);
-  const weights = contributors.map(c => c.weight);
-  const consensusP = weightedMean(values, weights);
-  const ci95 = bootstrapCI95(values, weights, 1000);
-
-  const impliedMarketP = meta.lastTradePriceYes;
-  const divergence = impliedMarketP != null ? consensusP - impliedMarketP : 0;
-  const divergenceDirection: SkillConsensus['divergenceDirection'] =
-    impliedMarketP == null
-      ? 'unknown'
-      : Math.abs(divergence) < 0.03
-      ? 'aligned'
-      : divergence > 0
-      ? 'market_underpriced' // consensus > market ⇒ skilled money thinks Yes is more likely than market says
-      : 'market_overpriced';
-
-  const contribBuckets = { total: contributors.length, A: 0, B: 0, C: 0, D: 0, F: 0 };
-  for (const c of contributors) {
-    contribBuckets[c.grade as keyof typeof contribBuckets] = (contribBuckets[c.grade as keyof typeof contribBuckets] ?? 0) + 1;
-  }
-
-  const topContributors = [...contributors].sort((a, b) => b.weight - a.weight).slice(0, 10);
-  const totalSkillStake = contributors.reduce((a, c) => a + (c.initialValue || 0), 0);
-
-  // Data-quality tier based on effective wallet count
-  let dataQuality: SkillConsensus['dataQuality'] = 'insufficient';
-  if (effectiveWalletCount >= 10) dataQuality = 'strong';
-  else if (effectiveWalletCount >= 5) dataQuality = 'moderate';
-  else if (effectiveWalletCount >= MIN_EFFECTIVE_SAMPLE) dataQuality = 'weak';
-
-  const notes: string[] = [];
-  if (meta.closed) notes.push('Market is closed — consensus reflects positions at/before close.');
-  if (contribBuckets.A + contribBuckets.B === 0) notes.push('No A or B grade wallets in this market — consensus driven by C/D grades.');
-  if (contributors.some(c => c.initialValue > 50_000)) notes.push('Whale positions present — stake weight uses sqrt(USDC) to dampen over-influence.');
-
-  const result: SkillConsensus = {
-    marketId: conditionId,
+  const result = computeConsensusFromPairs({
+    conditionId,
     marketTitle: meta.question,
     marketSlug: meta.slug,
-    impliedMarketP,
-    consensusP,
-    divergence,
-    divergenceDirection,
-    contributingWallets: contribBuckets,
-    gradeWeights: GRADE_WEIGHTS,
-    effectiveSampleSize: effectiveWalletCount,
-    ci95,
-    totalSkillStake,
-    topContributors,
-    asOf: new Date().toISOString(),
-    notes,
-    dataQuality,
-  };
+    marketClosed: meta.closed,
+    impliedMarketP: meta.lastTradePriceYes,
+    pairs,
+  });
 
-  consensusCache.set(conditionId, result);
+  if (!('error' in result)) consensusCache.set(conditionId, result);
   return result;
 }
 
@@ -437,5 +467,72 @@ export function getConsensusCacheStats() {
   return {
     consensusEntries: consensusCache.size,
     walletPositionEntries: positionByWalletCache.size,
+    lastWarmAt: lastWarmAt ? new Date(lastWarmAt).toISOString() : null,
+    lastWarmMarkets,
+    lastWarmDurationMs,
   };
+}
+
+// ─── Cache warmer ──────────────────────────────────────────────────
+
+let lastWarmAt: number = 0;
+let lastWarmMarkets: number = 0;
+let lastWarmDurationMs: number = 0;
+let warmInProgress = false;
+
+/**
+ * Pre-warm consensus cache against the top N active Polymarket markets by
+ * volume. Runs on boot and on an interval. Safe to call concurrently — it
+ * self-dedupes.
+ */
+export async function warmConsensusCache(topN = 20): Promise<{ markets: number; durationMs: number; errors: number }> {
+  if (warmInProgress) return { markets: 0, durationMs: 0, errors: 0 };
+  warmInProgress = true;
+  const start = Date.now();
+  let errors = 0;
+
+  try {
+    // Pull top active markets by volume — only unresolved (closed=false)
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    let markets: any[] = [];
+    try {
+      const res = await fetch(
+        `${GAMMA_BASE}/markets?closed=false&limit=${topN}&order=volumeNum&ascending=false`,
+        {
+          headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+          signal: ctrl.signal,
+        },
+      );
+      clearTimeout(timer);
+      if (res.ok) markets = await res.json();
+    } catch {
+      errors++;
+    }
+
+    const conditionIds = (markets || [])
+      .map((m: any) => m?.conditionId)
+      .filter((id: unknown): id is string => typeof id === 'string' && id.startsWith('0x'));
+
+    // Warm sequentially — each consensus fetch already fans out to 20
+    // parallel position fetches, so running multiple consensus fetches
+    // in parallel would stampede the data-api.
+    let warmed = 0;
+    for (const conditionId of conditionIds) {
+      try {
+        const result = await computeSkillConsensus(conditionId);
+        if (!('error' in result)) warmed++;
+      } catch {
+        errors++;
+      }
+    }
+
+    lastWarmAt = Date.now();
+    lastWarmMarkets = warmed;
+    lastWarmDurationMs = Date.now() - start;
+    console.log(`[Consensus Warmer] Warmed ${warmed}/${conditionIds.length} markets in ${lastWarmDurationMs}ms (${errors} errors)`);
+    return { markets: warmed, durationMs: lastWarmDurationMs, errors };
+  } finally {
+    warmInProgress = false;
+  }
 }

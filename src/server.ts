@@ -52,6 +52,7 @@ import {
   computeSkillConsensus,
   resolveMarketSlug,
   getConsensusCacheStats,
+  warmConsensusCache,
 } from './lib/consensus.js';
 import {
   getWalletProvenance,
@@ -2348,6 +2349,329 @@ app.get('/v1/polymarket/consensus/stats', (_req, res) => {
   });
 });
 
+/**
+ * HTML: /polymarket/consensus/methodology
+ */
+app.get('/polymarket/consensus/methodology', (_req, res) => {
+  res.type('html').send(methodologyPage());
+});
+
+/**
+ * HTML: /polymarket/markets/:marketId/consensus
+ * Shareable divergence page. Reads the same data as the JSON endpoint,
+ * renders a single-page scoreboard: market price vs skilled-money price,
+ * divergence badge, grade breakdown, top contributors with their revealed
+ * beliefs. Self-contained (inline CSS) so it works without the landing shell.
+ */
+app.get('/polymarket/markets/:marketId/consensus', async (req, res) => {
+  try {
+    let marketId = String(req.params.marketId || '').trim();
+    if (!marketId) return res.status(400).type('html').send(errorPage('Missing market identifier.'));
+
+    if (!marketId.startsWith('0x')) {
+      const resolved = await resolveMarketSlug(marketId);
+      if (!resolved) return res.status(404).type('html').send(errorPage(`Could not resolve "${hEsc(marketId)}" to a Polymarket market.`));
+      marketId = resolved;
+    }
+
+    const result = await computeSkillConsensus(marketId);
+    if ('error' in result) {
+      if (result.error === 'MARKET_NOT_FOUND') {
+        return res.status(404).type('html').send(errorPage(`Market ${marketId.slice(0, 10)}… not found on Polymarket.`));
+      }
+      if (result.error === 'INSUFFICIENT_DATA') {
+        return res.status(200).type('html').send(insufficientPage(marketId, result.message));
+      }
+      return res.status(502).type('html').send(errorPage(result.message));
+    }
+
+    return res.type('html').send(consensusPage(result));
+  } catch (err) {
+    return res.status(502).type('html').send(errorPage((err as Error).message));
+  }
+});
+
+// ─── HTML helpers for the consensus page ──────────────────────────
+
+function errorPage(msg: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Not Found</title><style>body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center}a{color:#3b82f6}</style></head><body><div style="font-size:28px;font-weight:800;letter-spacing:3px;margin-bottom:16px"><a href="/" style="color:#fff;text-decoration:none">VIGIL</a></div><div style="font-size:18px;color:#ef4444;margin-bottom:12px">${hEsc(msg)}</div><a href="/" style="margin-top:20px">← Back to VIGIL</a></body></html>`;
+}
+
+function insufficientPage(marketId: string, msg: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Insufficient Signal</title><style>body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;margin:0;padding:24px}.wrap{max-width:720px;margin:0 auto}.card{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:28px;margin-top:24px}a{color:#3b82f6}</style></head><body><div class="wrap"><div style="text-align:center;margin-bottom:24px"><a href="/" style="font-size:20px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none">VIGIL</a></div><div class="card"><div style="font-size:11px;color:#707070;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">// insufficient signal</div><div style="font-size:22px;font-weight:700;margin-bottom:12px">Not enough graded wallets in this market yet.</div><p style="color:#999;line-height:1.6">${hEsc(msg)}</p><p style="color:#555;font-size:13px;margin-top:20px">Market: <code>${hEsc(marketId)}</code></p><p style="margin-top:24px"><a href="/polymarket/leaderboard">← See the full skill leaderboard</a></p></div></div></body></html>`;
+}
+
+function methodologyPage(): string {
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL Consensus — Methodology</title>
+<meta name="description" content="How VIGIL aggregates graded wallet positions into a skill-weighted consensus probability. Full math, assumptions, and limitations.">
+<meta property="og:title" content="VIGIL Consensus — Methodology">
+<meta property="og:description" content="Grade-weighted, stake-dampened, time-decayed aggregation of Polymarket wallet positions. 1000-resample bootstrap CI.">
+<link rel="canonical" href="https://vigilscore.xyz/polymarket/consensus/methodology">
+<style>
+  body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;margin:0;padding:24px;line-height:1.7}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:28px;font-weight:800;margin:0 0 8px;letter-spacing:-0.5px}
+  h2{font-size:18px;font-weight:700;margin:32px 0 12px;color:#fff;border-bottom:1px solid #1e1e1e;padding-bottom:8px}
+  p{color:#ccc;font-size:15px}
+  code,pre{font-family:'JetBrains Mono','SF Mono',monospace;color:#eab308;background:#141414;padding:2px 6px;border-radius:2px;font-size:13px}
+  pre{display:block;padding:14px;color:#e5e7eb;line-height:1.5;overflow-x:auto}
+  .kicker{font-size:11px;color:#707070;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  a{color:#3b82f6;text-decoration:none}a:hover{text-decoration:underline}
+  .header{text-align:center;margin-bottom:24px}
+  .brand{font-size:22px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{padding:8px 12px;border-bottom:1px solid #1e1e1e;text-align:left}
+  th{color:#707070;font-size:11px;text-transform:uppercase;letter-spacing:1.5px}
+  .footer{text-align:center;margin-top:40px;color:#555;font-size:11px}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="header"><a class="brand" href="/">VIGIL</a><div style="color:#707070;font-size:13px;margin-top:4px">Consensus · Methodology</div></div>
+
+  <div class="kicker">// what this is</div>
+  <h1>Skill-weighted consensus for Polymarket.</h1>
+  <p>For any active Polymarket market, VIGIL aggregates the positions of every graded wallet in our universe (currently ~600 A/B/C/D-graded traders) into a single probability that represents "what does the calibrated money think about this market?" The number you see is <em>not</em> an average of all traders — it's weighted by each trader's historical forecasting skill, the size of their position, and how recently they took it.</p>
+
+  <h2>The formula</h2>
+  <pre>weight_i       = grade_weight_i × √(stake_i) × exp(−days_since_entry_i / 30)
+P_consensus    = Σ(weight_i × impliedP_Yes_i) / Σ(weight_i)</pre>
+  <p>Three weights multiply together:</p>
+
+  <h2>Grade weight</h2>
+  <p>A trader's grade is a proxy for their calibration skill — how well their stated probabilities match observed outcomes over their full resolved-bet history. Higher grades get more weight:</p>
+  <table>
+    <tr><th>Grade</th><th>Weight</th><th>Meaning</th></tr>
+    <tr><td><code>A</code></td><td><code>1.00</code></td><td>Demonstrated calibration across 100+ resolved bets. ~3% of scored wallets.</td></tr>
+    <tr><td><code>B</code></td><td><code>0.60</code></td><td>Solid calibration. ~8%.</td></tr>
+    <tr><td><code>C</code></td><td><code>0.25</code></td><td>Developing. ~20%.</td></tr>
+    <tr><td><code>D</code></td><td><code>0.05</code></td><td>Below naïve. Included but heavily down-weighted.</td></tr>
+    <tr><td><code>F</code></td><td><code>0.00</code></td><td>Excluded from consensus. Too unreliable to contribute.</td></tr>
+  </table>
+
+  <h2>Stake weight (√USDC)</h2>
+  <p>A trader staking $100,000 knows more than a trader staking $100 — but not 1000× more. We use <code>√(stake)</code> to dampen whale over-influence. A $1M position is 10× (not 100×) the weight of a $10K position.</p>
+
+  <h2>Time decay (30-day half-life)</h2>
+  <p>Beliefs go stale. A position taken 60 days ago reflects the trader's forecast at the time of entry — not today's information. We apply <code>exp(−days/30)</code>, so a 30-day-old position counts for half, a 60-day-old position for a quarter. Fresh positions dominate.</p>
+
+  <h2>Implied P(Yes) per position</h2>
+  <p>Each trader's revealed probability is their average entry price, inverted for No-side holders:</p>
+  <pre>Yes-side holder:   impliedP_Yes = avgPrice
+No-side holder:    impliedP_Yes = 1 − avgPrice</pre>
+  <p>Clamped to <code>[0.001, 0.999]</code> to avoid log-singularities downstream.</p>
+
+  <h2>Confidence interval</h2>
+  <p>95% CI is computed by 1000-resample bootstrap. We resample (wallet, position) pairs with replacement, recompute the weighted mean, and take the 2.5 / 97.5 percentiles. Wider CI ⇒ more disagreement among contributors.</p>
+
+  <h2>Gates (INSUFFICIENT_DATA)</h2>
+  <p>We refuse to publish a consensus if either:</p>
+  <table>
+    <tr><th>Gate</th><th>Threshold</th><th>Rationale</th></tr>
+    <tr><td>Minimum wallets</td><td><code>≥ 5</code></td><td>Fewer than 5 holders is noise, not signal.</td></tr>
+    <tr><td>Effective sample size</td><td><code>Σ(grade × decay) ≥ 0.5</code></td><td>E.g. 5 C-grades clears this; 10 F-grades does not.</td></tr>
+  </table>
+
+  <h2>Data quality bands</h2>
+  <table>
+    <tr><th>Band</th><th>Effective sample</th><th>Interpretation</th></tr>
+    <tr><td><code>strong</code></td><td>≥ 10</td><td>Multiple A/B-grade contributors. Treat seriously.</td></tr>
+    <tr><td><code>moderate</code></td><td>5 – 10</td><td>Useful signal; note the CI width.</td></tr>
+    <tr><td><code>weak</code></td><td>0.5 – 5</td><td>Light signal. Could flip with one more data point.</td></tr>
+    <tr><td><code>insufficient</code></td><td>&lt; 0.5</td><td>Not published.</td></tr>
+  </table>
+
+  <h2>What consensus does NOT mean</h2>
+  <p>This is not a price prediction. It is an <em>aggregation of revealed beliefs</em> from traders who have historically been well-calibrated. A divergence between market and consensus is a disagreement, not a trade signal. Skilled traders can be wrong; new information can move the market before it moves consensus.</p>
+  <p>Consensus also inherits the limits of its inputs: our graded universe is currently ~600 wallets (growing), and the grade itself is an estimate with its own confidence interval. See the <a href="/polymarket/methodology">scoring methodology</a> for how grades are computed.</p>
+
+  <h2>Known limitations</h2>
+  <p>The "days since entry" field is heuristic — Polymarket's position endpoint doesn't expose first-entry timestamps. We approximate from market-close date. v1.22 will cross-reference the trade log to recover exact entry timestamps.</p>
+  <p>Positions that have been fully exited aren't counted — only current holdings. If a graded A-grade trader bought at 0.30 and sold at 0.55 two days ago, their conviction is gone from our aggregate.</p>
+
+  <h2>Get the JSON</h2>
+  <pre>GET /v1/polymarket/markets/:marketId/skill-consensus</pre>
+  <p>Accepts a Polymarket <code>conditionId</code> (0x…) or a slug (<code>will-trump-win-2024</code>). Returns the full breakdown including top contributors. 5-minute TTL cache.</p>
+
+  <div class="footer"><a href="/" style="color:#707070">← Back to VIGIL</a> · <a href="/polymarket/leaderboard" style="color:#707070">Skill Leaderboard</a> · <a href="/polymarket/methodology" style="color:#707070">Grade Methodology</a></div>
+</div>
+</body></html>`;
+}
+
+function consensusPage(r: import('./lib/consensus.js').SkillConsensus): string {
+  const marketP = r.impliedMarketP;
+  const consP = r.consensusP;
+  const div = r.divergence;
+  const divAbs = Math.abs(div);
+  const divPct = (divAbs * 100).toFixed(1);
+
+  // Divergence color coding
+  const divColor = r.divergenceDirection === 'aligned'
+    ? '#707070'
+    : divAbs > 0.15 ? '#ef4444'
+    : divAbs > 0.07 ? '#f97316'
+    : '#eab308';
+
+  const divLabel = r.divergenceDirection === 'aligned' ? 'ALIGNED'
+    : r.divergenceDirection === 'market_overpriced' ? 'MARKET OVERPRICED'
+    : r.divergenceDirection === 'market_underpriced' ? 'MARKET UNDERPRICED'
+    : 'NO MARKET PRICE';
+
+  const qualityLabel = { strong: 'STRONG', moderate: 'MODERATE', weak: 'WEAK', insufficient: 'INSUFFICIENT' }[r.dataQuality] ?? 'UNKNOWN';
+  const qualityColor = r.dataQuality === 'strong' ? '#10b981' : r.dataQuality === 'moderate' ? '#eab308' : '#f97316';
+
+  // Grade breakdown bars
+  const gradeOrder: Array<'A' | 'B' | 'C' | 'D' | 'F'> = ['A', 'B', 'C', 'D', 'F'];
+  const gradeColor: Record<string, string> = { A: '#10b981', B: '#3b82f6', C: '#eab308', D: '#f97316', F: '#ef4444' };
+  const gradeBars = gradeOrder.map(g => {
+    const n = (r.contributingWallets as any)[g] || 0;
+    if (n === 0) return '';
+    const pct = Math.round((n / r.contributingWallets.total) * 100);
+    return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><div style="width:24px;height:24px;border-radius:2px;background:${gradeColor[g]}20;color:${gradeColor[g]};font-weight:700;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;font-size:13px">${g}</div><div style="flex:1;background:#1e1e1e;border-radius:2px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${gradeColor[g]}"></div></div><div style="width:60px;text-align:right;font-size:13px;color:#999">${n} <span style="color:#555">wallet${n === 1 ? '' : 's'}</span></div></div>`;
+  }).join('');
+
+  // Top contributors table
+  const contribRows = r.topContributors.map(c => {
+    const gc = gradeColor[c.grade] || '#999';
+    const impliedPct = (c.impliedPYes * 100).toFixed(1);
+    const stake = c.initialValue >= 1000 ? `$${Math.round(c.initialValue / 1000)}K` : `$${Math.round(c.initialValue)}`;
+    const side = c.outcome === 'Yes' ? '#10b981' : '#ef4444';
+    return `<tr style="border-top:1px solid #1e1e1e"><td style="padding:10px 12px"><a href="/polymarket/${c.wallet}" style="color:#fff;text-decoration:none;font-weight:600">${hEsc(c.displayName || c.wallet.slice(0, 10) + '…')}</a></td><td style="padding:10px 12px"><span style="display:inline-block;padding:2px 6px;border-radius:2px;background:${gc}20;color:${gc};font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700">${c.grade}/${c.trustScore}</span></td><td style="padding:10px 12px;color:${side};font-weight:600;font-size:13px">${c.outcome}</td><td style="padding:10px 12px;color:#fff;font-weight:700;font-family:'JetBrains Mono',monospace">${impliedPct}%</td><td style="padding:10px 12px;color:#999;font-size:13px">${stake}</td></tr>`;
+  }).join('');
+
+  const notesHtml = r.notes.length === 0 ? '' :
+    `<div style="margin-top:20px;padding:12px 16px;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:2px"><div style="font-size:10px;color:#707070;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px">// notes</div><ul style="margin:0;padding-left:20px;color:#999;font-size:13px;line-height:1.6">${r.notes.map(n => `<li>${hEsc(n)}</li>`).join('')}</ul></div>`;
+
+  const marketPriceBlock = marketP == null
+    ? `<div style="font-size:13px;color:#555">Market price unavailable</div>`
+    : `<div style="font-size:42px;font-weight:800;color:#fff;font-family:'JetBrains Mono',monospace;letter-spacing:-1px">${(marketP * 100).toFixed(1)}%</div>`;
+
+  const tweetText = marketP == null
+    ? `Graded Polymarket wallets' weighted probability on "${r.marketTitle}" is ${(consP * 100).toFixed(1)}%. See the divergence at`
+    : r.divergenceDirection === 'aligned'
+      ? `Polymarket and graded wallets agree on "${r.marketTitle}" — both ~${(consP * 100).toFixed(1)}%.`
+      : `Polymarket market says ${(marketP * 100).toFixed(1)}%. ${r.contributingWallets.total} graded wallets say ${(consP * 100).toFixed(1)}%. Divergence: ${divPct}pp.`;
+  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent('https://vigilscore.xyz/polymarket/markets/' + r.marketId + '/consensus')}`;
+
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL Consensus — ${hEsc(r.marketTitle || r.marketId.slice(0, 10))}</title>
+<meta name="description" content="Skill-weighted consensus probability from ${r.contributingWallets.total} graded Polymarket wallets. Current divergence: ${divPct}pp.">
+<meta property="og:title" content="VIGIL Consensus: ${hEsc(r.marketTitle || 'Polymarket')}">
+<meta property="og:description" content="Market: ${marketP != null ? (marketP * 100).toFixed(1) + '%' : '—'} · Skilled money: ${(consP * 100).toFixed(1)}% · Divergence: ${divPct}pp across ${r.contributingWallets.total} graded wallets.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://vigilscore.xyz/polymarket/markets/${r.marketId}/consensus">
+<style>
+  *{box-sizing:border-box}
+  body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:24px;line-height:1.6}
+  .wrap{max-width:920px;margin:0 auto}
+  .kicker{font-size:11px;color:#707070;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  .header{text-align:center;margin-bottom:32px}
+  .header a.brand{font-size:22px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none}
+  .header .sub{color:#707070;font-size:13px;margin-top:4px}
+  .card{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:24px}
+  .title{font-size:22px;font-weight:700;line-height:1.35;margin:0 0 6px}
+  .slug{font-family:'JetBrains Mono','SF Mono',monospace;color:#555;font-size:12px}
+  .pricerow{display:grid;grid-template-columns:1fr auto 1fr;gap:20px;align-items:center;margin:32px 0}
+  .pricecol{text-align:center}
+  .pricecol .label{font-size:11px;color:#707070;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px;font-weight:600}
+  .pricecol .value{font-size:42px;font-weight:800;color:#fff;font-family:'JetBrains Mono','SF Mono',monospace;letter-spacing:-1px}
+  .ci{color:#707070;font-size:12px;margin-top:4px;font-family:'JetBrains Mono',monospace}
+  .divarrow{font-size:32px;color:#333}
+  .divbadge{display:inline-block;padding:12px 18px;border-radius:2px;font-weight:800;letter-spacing:2px;font-size:12px;border:1px solid}
+  .divnum{font-size:26px;font-family:'JetBrains Mono',monospace;font-weight:800;margin-top:8px}
+  .tag{display:inline-block;padding:4px 10px;border-radius:2px;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-left:8px}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:24px}
+  .mcell{background:#0a0a0a;border:1px solid #1e1e1e;border-radius:2px;padding:14px}
+  .mcell .label{font-size:10px;color:#707070;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
+  .mcell .value{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
+  th{text-align:left;padding:8px 12px;color:#707070;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;border-bottom:1px solid #1e1e1e}
+  .share{text-align:center;margin:32px 0 12px}
+  .btn{display:inline-block;background:#1f2937;color:#fff;text-decoration:none;padding:12px 20px;border-radius:2px;font-weight:600;font-size:14px;border:1px solid #374151}
+  .btn:hover{background:#374151}
+  .btn.primary{background:#fff;color:#0c0c0c;border-color:#fff}
+  .footer{text-align:center;margin-top:40px;color:#444;font-size:11px}
+  .footer a{color:#707070;text-decoration:none;margin:0 8px}
+  .footer a:hover{color:#fff}
+  @media (max-width:640px){
+    .pricerow{grid-template-columns:1fr;gap:12px}
+    .divarrow{transform:rotate(90deg)}
+  }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <a class="brand" href="/">VIGIL</a>
+    <div class="sub">Skill-Weighted Consensus · Polymarket</div>
+  </div>
+
+  <div class="card">
+    <div class="kicker">// market</div>
+    <div class="title">${hEsc(r.marketTitle || 'Unnamed market')}</div>
+    ${r.marketSlug ? `<div class="slug">${hEsc(r.marketSlug)}</div>` : ''}
+
+    <div class="pricerow">
+      <div class="pricecol">
+        <div class="label">Market Price (Yes)</div>
+        ${marketPriceBlock}
+      </div>
+      <div class="divarrow">→</div>
+      <div class="pricecol">
+        <div class="label">Skilled Money (Yes)</div>
+        <div class="value" style="color:${divColor}">${(consP * 100).toFixed(1)}%</div>
+        <div class="ci">95% CI: ${(r.ci95.low * 100).toFixed(1)}% – ${(r.ci95.high * 100).toFixed(1)}%</div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:8px;padding:20px;border-top:1px solid #1e1e1e">
+      <div class="divbadge" style="color:${divColor};border-color:${divColor}40;background:${divColor}15">${divLabel}</div>
+      ${marketP != null ? `<div class="divnum" style="color:${divColor}">Δ ${div >= 0 ? '+' : '−'}${divPct} pp</div>` : ''}
+      <div style="color:#707070;font-size:12px;margin-top:6px">${r.contributingWallets.total} graded wallets · effective sample ${r.effectiveSampleSize.toFixed(2)} <span class="tag" style="background:${qualityColor}15;color:${qualityColor};border:1px solid ${qualityColor}40">${qualityLabel}</span></div>
+    </div>
+
+    <div class="meta-grid">
+      <div class="mcell"><div class="label">Total Skilled Stake</div><div class="value">$${Math.round(r.totalSkillStake).toLocaleString()}</div></div>
+      <div class="mcell"><div class="label">A-grade Wallets</div><div class="value" style="color:${gradeColor.A}">${r.contributingWallets.A}</div></div>
+      <div class="mcell"><div class="label">B-grade Wallets</div><div class="value" style="color:${gradeColor.B}">${r.contributingWallets.B}</div></div>
+      <div class="mcell"><div class="label">As Of</div><div class="value" style="font-size:12px">${new Date(r.asOf).toUTCString().slice(5, 22)}</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div class="kicker">// grade breakdown</div>
+    <div style="margin-top:12px">${gradeBars || '<div style="color:#555">No contributors.</div>'}</div>
+    ${notesHtml}
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div class="kicker">// top contributors (by weight)</div>
+    <table>
+      <thead><tr><th>Wallet</th><th>Grade</th><th>Side</th><th>Implied P(Yes)</th><th>Stake</th></tr></thead>
+      <tbody>${contribRows}</tbody>
+    </table>
+    <div style="margin-top:12px;color:#555;font-size:12px">Weight = grade × √(stake) × exp(−days/30). Implied P(Yes) is the trader's revealed probability (avgPrice, inverted for No-holders).</div>
+  </div>
+
+  <div class="share">
+    <a class="btn primary" href="${tweetUrl}" target="_blank" rel="noopener">Share on X</a>
+    <a class="btn" href="/polymarket/consensus/methodology">Methodology →</a>
+    <a class="btn" href="/polymarket/leaderboard">Skill Leaderboard →</a>
+  </div>
+
+  <div class="footer">
+    VIGIL Consensus is informational. Not financial advice.
+    <br>
+    <a href="/">Home</a> · <a href="/v1/polymarket/markets/${r.marketId}/skill-consensus">JSON</a> · <a href="/polymarket/consensus/methodology">Methodology</a>
+  </div>
+</div>
+</body></html>`;
+}
+
 // ============================================================
 //  WALLET DISCOVERY & SKILL LEADERBOARD (v1.18.0)
 //  Crawl resolved markets, discover skilled wallets, surface A/B grades
@@ -3335,6 +3659,16 @@ async function start() {
       });
     }, 2 * 3600000); // every 2 hours
     console.log('[BOOT] Discovery crawler scheduled: 2min initial delay, then every 2h');
+
+    // Schedule consensus cache warmer: 3 min after boot (let leaderboard load first),
+    // then every 5 min. Pre-warms top 20 active markets so landing-page widget is never cold.
+    setTimeout(() => {
+      warmConsensusCache(20).catch(err => console.error('[BOOT] Initial consensus warm failed:', err));
+    }, 180_000);
+    setInterval(() => {
+      warmConsensusCache(20).catch(err => console.error('[CRON] Consensus warm failed:', err));
+    }, 5 * 60 * 1000);
+    console.log('[BOOT] Consensus cache warmer scheduled: 3min initial delay, then every 5min');
   });
 
   // Start ACP evaluator listener in the background (optional, non-fatal)
