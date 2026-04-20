@@ -178,17 +178,32 @@ async function fetchJson<T>(url: string, timeoutMs = 12000): Promise<T> {
 
 /**
  * Fetch all trades for a wallet. Paginates automatically.
- * Caps at 2000 trades to stay reasonable.
+ * v1.21.0: Cap raised to 5000 to capture full history of whale wallets
+ * (RN1 has 950+ resolved bets; others may have thousands of trades across
+ * multi-leg election markets). Calls are cheap (100/page, cached upstream).
  */
-export async function fetchTrades(wallet: string, maxTrades = 2000): Promise<PolymarketTrade[]> {
+export async function fetchTrades(wallet: string, maxTrades = 5000): Promise<PolymarketTrade[]> {
   const all: PolymarketTrade[] = [];
   let offset = 0;
   const limit = 100;
 
   while (all.length < maxTrades) {
-    const batch = await fetchJson<PolymarketTrade[]>(
-      `${DATA_BASE}/trades?user=${wallet}&limit=${limit}&offset=${offset}`,
-    );
+    let batch: PolymarketTrade[];
+    try {
+      batch = await fetchJson<PolymarketTrade[]>(
+        `${DATA_BASE}/trades?user=${wallet}&limit=${limit}&offset=${offset}`,
+      );
+    } catch (err) {
+      // v1.21.0: data-api returns HTTP 400 when offset exceeds its internal cap
+      // (~3000 for high-volume wallets). Gracefully return what we have — the
+      // CLOB fallback will fill calibration data for any already-seen markets.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('HTTP 400') || msg.includes('HTTP 422') || msg.includes('HTTP 500')) {
+        console.warn(`[polymarket] fetchTrades paginated to offset=${offset}, data-api refused further pages; returning ${all.length} trades`);
+        break;
+      }
+      throw err;
+    }
     if (!Array.isArray(batch) || batch.length === 0) break;
     all.push(...batch);
     if (batch.length < limit) break;
@@ -220,9 +235,18 @@ export async function fetchAllPositions(wallet: string): Promise<PolymarketPosit
   for (const redeemed of ['true', 'false']) {
     let offset = 0;
     while (offset < 500) {
-      const batch = await fetchJson<PolymarketPosition[]>(
-        `${DATA_BASE}/positions?user=${wallet}&limit=100&offset=${offset}&redeemed=${redeemed}`,
-      );
+      let batch: PolymarketPosition[];
+      try {
+        batch = await fetchJson<PolymarketPosition[]>(
+          `${DATA_BASE}/positions?user=${wallet}&limit=100&offset=${offset}&redeemed=${redeemed}`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('HTTP 400') || msg.includes('HTTP 422') || msg.includes('HTTP 500')) {
+          break; // offset past API cap — continue with other redeemed state
+        }
+        throw err;
+      }
       if (!Array.isArray(batch) || batch.length === 0) break;
       all.push(...batch);
       if (batch.length < 100) break;
@@ -299,8 +323,10 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
     tradesByMarket.set(t.conditionId, existing);
   }
 
-  // Look up resolution for each market (cap at 250 for depth vs rate limits)
-  const conditionIds = [...tradesByMarket.keys()].slice(0, 250);
+  // v1.21.0: Raise cap to 500 for whale wallets that trade hundreds of markets.
+  // Each CLOB market lookup is cached forever (resolutions never change once set),
+  // so first-pass cost amortizes away.
+  const conditionIds = [...tradesByMarket.keys()].slice(0, 500);
   const resolutions = await Promise.allSettled(
     conditionIds.map(id => fetchMarketResolution(id))
   );
@@ -393,6 +419,7 @@ async function resolveTradesViaClob(trades: PolymarketTrade[]): Promise<Resolved
       pnl,
       size: netShares,
       side,
+      conditionId: conditionIds[i],
       entryTimestamp,
     });
   }
@@ -416,6 +443,7 @@ interface ResolvedBet {
   pnl: number;           // what they made/lost
   size: number;           // position size in shares
   side: 'BUY' | 'SELL';   // whether this was a buy or sell position
+  conditionId?: string;   // v1.21.0: market identifier — required for robust deduplication across sources
   entryTimestamp?: number; // when they entered (earliest trade in this market)
   resolutionTimestamp?: number; // when market resolved (if known)
   marketCreatedAt?: number;    // when market was created (if known)
@@ -457,7 +485,7 @@ function extractResolvedBetsFromPositions(
       ? size * (1 - rawPrice)
       : size * (-rawPrice);
 
-    bets.push({ impliedProb, correct, pnl, size, side });
+    bets.push({ impliedProb, correct, pnl, size, side, conditionId: p.conditionId });
   }
 
   return bets;
@@ -752,51 +780,29 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
   // reconstruct resolved bets by looking up market outcomes via CLOB API.
   // This recovers data from positions that Polymarket's API has purged.
   const uniqueMarketCount = new Set(trades.map(t => t.conditionId)).size;
-  if (resolvedBets.length < 20 && trades.length >= 50 && uniqueMarketCount >= 10) {
+  // v1.21.0: Trigger CLOB fallback much more aggressively — positions API purges
+  // resolved markets over time, so any wallet with more unique traded markets than
+  // observed resolved positions likely has CLOB-recoverable history.
+  // Previously required <20 resolved AND ≥50 trades AND ≥10 markets — too restrictive,
+  // which is what caused Theo4 ($22M leaderboard whale, 803 trades, 14 election markets
+  // all resolved, $41M in REDEEM events on-chain) to show only 5 resolved bets.
+  if (uniqueMarketCount > resolvedBets.length && trades.length >= 5) {
     try {
       const clobResolved = await resolveTradesViaClob(trades);
       if (clobResolved.length > 0) {
-        // Merge: deduplicate by conditionId and union both sets
-        // Build a map of conditionId -> ResolvedBet from position-based bets
-        const positionBetsMap = new Map<string, ResolvedBet>();
-        const tradesByConditionId = new Map<string, PolymarketTrade[]>();
-        for (const trade of trades) {
-          if (!tradesByConditionId.has(trade.conditionId)) {
-            tradesByConditionId.set(trade.conditionId, []);
-          }
-          tradesByConditionId.get(trade.conditionId)!.push(trade);
-        }
+        // v1.21.0: Dedupe by conditionId directly — no more price-proximity heuristic.
+        // Prefer CLOB-derived bet when both sources have the same market (CLOB uses
+        // actual settlement outcomes and aggregates trades by buy/sell net).
+        const byCid = new Map<string, ResolvedBet>();
         for (const bet of resolvedBets) {
-          const conditionIds = Array.from(tradesByConditionId.keys());
-          // Find the conditionId for this bet by matching with trades
-          for (const cId of conditionIds) {
-            const tradesForCondition = tradesByConditionId.get(cId) || [];
-            // Simple heuristic: match by impliedProb proximity to trade prices
-            if (tradesForCondition.some(t => Math.abs(t.price - bet.impliedProb) < 0.01)) {
-              positionBetsMap.set(cId, bet);
-              break;
-            }
-          }
+          if (bet.conditionId) byCid.set(bet.conditionId, bet);
         }
-
-        // Create a map of conditionId -> ResolvedBet from CLOB bets
-        const clobBetsMap = new Map<string, ResolvedBet>();
         for (const bet of clobResolved) {
-          const conditionIds = Array.from(tradesByConditionId.keys());
-          for (const cId of conditionIds) {
-            const tradesForCondition = tradesByConditionId.get(cId) || [];
-            if (tradesForCondition.some(t => Math.abs(t.price - bet.impliedProb) < 0.01)) {
-              clobBetsMap.set(cId, bet);
-              break;
-            }
-          }
+          if (bet.conditionId) byCid.set(bet.conditionId, bet); // CLOB overwrites position source
         }
-
-        // Union: all conditionIds from both sources
-        const allConditionIds = new Set([...positionBetsMap.keys(), ...clobBetsMap.keys()]);
-        resolvedBets = Array.from(allConditionIds).map(cId =>
-          positionBetsMap.get(cId) || clobBetsMap.get(cId)!
-        );
+        // Also keep any position-derived bets that somehow lack conditionId (defensive)
+        const orphanPositionBets = resolvedBets.filter(b => !b.conditionId);
+        resolvedBets = [...byCid.values(), ...orphanPositionBets];
       }
     } catch {
       // CLOB lookup failed — continue with position-based data
