@@ -611,6 +611,99 @@ export function isBasescanConfigured(): boolean {
   return !!getApiKey();
 }
 
+// ============================================================
+//  v1.21.0: POLYMARKET ON-CHAIN COVERAGE CROSS-CHECK
+//
+//  Ground truth — read the wallet's USDC.e transfers FROM Polymarket
+//  contracts on Polygon. Each transfer = either a sell settlement or a
+//  winning-share redemption. Used as a quality gate: if data-api says
+//  N resolved bets but on-chain shows M>>N withdrawals from Polymarket
+//  contracts, the scorer is blind-spotted and should warn loudly.
+// ============================================================
+
+// Polymarket Polygon contract addresses (lowercase)
+const POLYMARKET_CONTRACTS = new Set<string>([
+  '0x4bfb4297f0c915f612d8b56e822e0c0b2e889ed6', // CTF Exchange
+  '0x9a26e6d4a93ec9103c16a2c77a7e3ba62c21354c', // Neg Risk CTF Exchange
+  '0x4d97dcd97ec945f40cf65f87097ace5ea0476045', // Neg Risk Adapter / Conditional Tokens
+  '0xd91e80cf2e7be2e162c6513ced06f1dd0da35296', // Polymarket UMA CTF Adapter
+]);
+
+// USDC.e on Polygon — what Polymarket actually moves
+const USDC_E_POLYGON = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
+
+export interface PolymarketOnChainCoverage {
+  wallet: string;
+  usdcInflowsFromPolymarket: number;     // total USDC.e received from Polymarket contracts
+  usdcOutflowsToPolymarket: number;      // total USDC.e sent to Polymarket contracts
+  withdrawalTxCount: number;             // how many on-chain pay-out events observed
+  largestWithdrawal: number;             // biggest single USDC.e withdrawal
+  firstPolymarketTxDate: string;         // ISO date of first Polymarket interaction
+  fetchedAt: string;
+}
+
+/**
+ * Ground-truth on-chain coverage for a Polymarket wallet. Reads USDC.e
+ * transfers between the wallet and any Polymarket contract on Polygon.
+ * Returns null if Etherscan/Basescan is not configured (graceful degrade).
+ *
+ * This is the anti-blind-spot check: any deviation between data-api
+ * redeem totals and on-chain withdrawals tells us to look harder.
+ */
+export async function getPolymarketOnChainCoverage(
+  wallet: string,
+): Promise<PolymarketOnChainCoverage | null> {
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
+
+  try {
+    const tokenTxs = await fetchTokenTransfers(wallet, CHAINS.POLYGON.id);
+    const walletLower = wallet.toLowerCase();
+
+    let usdcIn = 0;
+    let usdcOut = 0;
+    let withdrawCount = 0;
+    let largest = 0;
+    let firstTs = 0;
+
+    for (const tx of tokenTxs) {
+      if (tx.contractAddress.toLowerCase() !== USDC_E_POLYGON) continue;
+      const from = tx.from.toLowerCase();
+      const to = tx.to.toLowerCase();
+      const decimals = Number(tx.tokenDecimal) || 6;
+      const amount = Number(tx.value) / Math.pow(10, decimals);
+      const ts = Number(tx.timeStamp);
+
+      const fromPM = POLYMARKET_CONTRACTS.has(from);
+      const toPM = POLYMARKET_CONTRACTS.has(to);
+      if (!fromPM && !toPM) continue;
+
+      if (firstTs === 0 || ts < firstTs) firstTs = ts;
+
+      if (fromPM && to === walletLower) {
+        usdcIn += amount;
+        withdrawCount++;
+        if (amount > largest) largest = amount;
+      } else if (toPM && from === walletLower) {
+        usdcOut += amount;
+      }
+    }
+
+    return {
+      wallet: walletLower,
+      usdcInflowsFromPolymarket: Math.round(usdcIn * 100) / 100,
+      usdcOutflowsToPolymarket: Math.round(usdcOut * 100) / 100,
+      withdrawalTxCount: withdrawCount,
+      largestWithdrawal: Math.round(largest * 100) / 100,
+      firstPolymarketTxDate: firstTs > 0 ? new Date(firstTs * 1000).toISOString().split('T')[0] : 'never',
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.error(`[basescan] getPolymarketOnChainCoverage failed for ${wallet}:`, err);
+    return null;
+  }
+}
+
 /**
  * Quick sybil check: wallet age < 7 days AND < 5 txs = likely sybil.
  * Returns null if Basescan is not configured (graceful skip).

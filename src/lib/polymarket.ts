@@ -6,7 +6,7 @@
 //   data-api.polymarket.com  — trades, positions, activity per wallet
 //   basescan (etherscan v2)  — on-chain verification layer
 
-import { getWalletProvenance, isBasescanConfigured, CHAINS, type WalletProvenance } from './basescan.js';
+import { getWalletProvenance, getPolymarketOnChainCoverage, isBasescanConfigured, CHAINS, type WalletProvenance, type PolymarketOnChainCoverage } from './basescan.js';
 import { query } from './db.js';
 
 const USER_AGENT = 'VIGIL-Trust/1.18.0 (vigil.trust; prediction-market-scoring)';
@@ -150,6 +150,12 @@ export interface PolymarketRiskReport {
     pnlDivergence: number | null;   // difference between API-reported and on-chain PnL
     pnlVerified: boolean;
   } | null;
+
+  // v1.21.0: Polymarket-specific on-chain coverage cross-check.
+  // Reads USDC.e transfers between the wallet and Polymarket contracts on
+  // Polygon. Quality gate against data-api blind spots — if on-chain
+  // withdrawal count >> data-api resolved-bet count, we flag it.
+  polymarketCoverage: PolymarketOnChainCoverage | null;
 
   // Meta
   scoredAt: string;
@@ -764,10 +770,17 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     ? getWalletProvenance(wallet, CHAINS.POLYGON.id).catch(() => null)
     : Promise.resolve(null);
 
-  const [trades, allPositions, provenance] = await Promise.all([
+  // v1.21.0: Polymarket-specific on-chain coverage (USDC.e flows between
+  // the wallet and Polymarket contracts). Used as a blind-spot tripwire.
+  const coveragePromise: Promise<PolymarketOnChainCoverage | null> = isBasescanConfigured()
+    ? getPolymarketOnChainCoverage(wallet).catch(() => null)
+    : Promise.resolve(null);
+
+  const [trades, allPositions, provenance, polymarketCoverage] = await Promise.all([
     fetchTrades(wallet),
     fetchAllPositions(wallet),
     onChainPromise,
+    coveragePromise,
   ]);
 
   if (trades.length === 0 && allPositions.length === 0) return null;
@@ -1152,6 +1165,31 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     );
   }
 
+  // v1.21.0: POLYMARKET COVERAGE TRIPWIRE
+  // If on-chain shows the wallet has withdrawn from Polymarket contracts
+  // far more often than our resolved-bet record reflects, the scorer is
+  // blind-spotted for this wallet. Emit a visible flag so the grade
+  // carries the caveat into the UI and the API response.
+  if (polymarketCoverage) {
+    const withdrawals = polymarketCoverage.withdrawalTxCount;
+    const observedResolved = resolvedBets.length;
+    if (withdrawals >= 10 && withdrawals > observedResolved * 1.5) {
+      flags.push(
+        `On-chain coverage gap: ${withdrawals} Polymarket USDC withdrawals observed, ` +
+        `but only ${observedResolved} resolved bets recovered from data-api + CLOB. ` +
+        `Grade based on a subset of the wallet's forecasting history.`,
+      );
+    }
+    if (polymarketCoverage.usdcInflowsFromPolymarket > 10000) {
+      greenFlags.push(
+        `On-chain: $${Math.round(polymarketCoverage.usdcInflowsFromPolymarket).toLocaleString()} total USDC.e received from Polymarket contracts across ${withdrawals} tx (Polygon)`,
+      );
+    }
+    reasoning.push(
+      `Polymarket on-chain coverage: $${Math.round(polymarketCoverage.usdcInflowsFromPolymarket).toLocaleString()} in / $${Math.round(polymarketCoverage.usdcOutflowsToPolymarket).toLocaleString()} out across ${withdrawals} withdrawal tx since ${polymarketCoverage.firstPolymarketTxDate}.`,
+    );
+  }
+
   reasoning.push(
     `${trades.length} total trades across ${uniqueMarkets} markets.`,
     `${resolvedBets.length} bets on resolved markets available for calibration scoring.`,
@@ -1237,6 +1275,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     },
     calibrationReport,
     onChain: onChainBlock,
+    polymarketCoverage,
     reasoning,
     flags,
     greenFlags,
