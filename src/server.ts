@@ -49,6 +49,11 @@ import {
   type LeaderboardEntry,
 } from './lib/polymarket.js';
 import {
+  computeSkillConsensus,
+  resolveMarketSlug,
+  getConsensusCacheStats,
+} from './lib/consensus.js';
+import {
   getWalletProvenance,
   isBasescanConfigured,
   quickSybilCheck,
@@ -2281,6 +2286,66 @@ app.get('/polymarket/compare', async (req, res) => {
   } catch (err) {
     res.status(500).type('html').send(`<html><body style="background:#0c0c0c;color:#ef4444;padding:40px">Compare failed: ${pmEscape((err as Error).message)}</body></html>`);
   }
+});
+
+// ============================================================
+//  SKILL-WEIGHTED CONSENSUS (v1.21.0)
+//  For a given market, aggregate the positions of every graded wallet
+//  (weighted by grade × sqrt(stake) × time decay) into a single
+//  "skilled money" probability. The headline divergence number is
+//  (consensusP - impliedMarketP) — it says: where is the calibrated
+//  money disagreeing with the market?
+// ============================================================
+
+/**
+ * GET /v1/polymarket/markets/:marketId/skill-consensus
+ *   marketId → Polymarket conditionId (0x...), OR a human-readable slug
+ *
+ * Response (success):
+ *   { marketId, marketTitle, marketSlug, impliedMarketP, consensusP,
+ *     divergence, divergenceDirection, contributingWallets, gradeWeights,
+ *     effectiveSampleSize, ci95, totalSkillStake, topContributors,
+ *     asOf, notes, dataQuality }
+ *
+ * Response (insufficient data):
+ *   { error: 'INSUFFICIENT_DATA' | 'MARKET_NOT_FOUND', message, ... }
+ */
+app.get('/v1/polymarket/markets/:marketId/skill-consensus', async (req, res) => {
+  try {
+    let marketId = String(req.params.marketId || '').trim();
+    if (!marketId) {
+      return res.status(400).json({ error: 'MISSING_MARKET_ID', message: 'Provide a conditionId (0x...) or market slug.' });
+    }
+
+    // Resolve slug → conditionId if a non-0x identifier was provided
+    if (!marketId.startsWith('0x')) {
+      const resolved = await resolveMarketSlug(marketId);
+      if (!resolved) {
+        return res.status(404).json({ error: 'MARKET_NOT_FOUND', message: `Could not resolve "${marketId}" to a Polymarket market.` });
+      }
+      marketId = resolved;
+    }
+
+    const result = await computeSkillConsensus(marketId);
+    if ('error' in result) {
+      const status = result.error === 'MARKET_NOT_FOUND' ? 404 : result.error === 'INSUFFICIENT_DATA' ? 422 : 502;
+      return res.status(status).json(result);
+    }
+
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: 'CONSENSUS_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+/**
+ * GET /v1/polymarket/consensus/stats — warm/cold cache visibility.
+ */
+app.get('/v1/polymarket/consensus/stats', (_req, res) => {
+  res.json({
+    ...getConsensusCacheStats(),
+    leaderboardSize: getSkillLeaderboard().length,
+  });
 });
 
 // ============================================================
