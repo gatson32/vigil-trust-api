@@ -1450,7 +1450,7 @@ export async function buildSkillLeaderboard(
         continue;
       }
 
-      entries.push({
+      const newEntry: LeaderboardEntry = {
         wallet: report.wallet,
         displayName: report.displayName,
         trustScore: report.trustScore,
@@ -1461,7 +1461,35 @@ export async function buildSkillLeaderboard(
         winRate: report.raw.winRate,
         realizedPnl: report.raw.realizedPnl,
         scoredAt: report.scoredAt,
-      });
+      };
+      entries.push(newEntry);
+
+      // v1.22: Incremental persist — write each entry as it's scored so the leaderboard
+      // survives mid-crawl crashes, deploys, or process recycles. Idempotent upsert.
+      try {
+        await query(
+          `INSERT INTO leaderboard_cache (wallet, display_name, trust_grade, trust_score, brier_skill, calibration_error, resolved_bets, realized_pnl, scored_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+           ON CONFLICT (wallet) DO UPDATE SET
+             display_name = EXCLUDED.display_name,
+             trust_grade = EXCLUDED.trust_grade,
+             trust_score = EXCLUDED.trust_score,
+             brier_skill = EXCLUDED.brier_skill,
+             calibration_error = EXCLUDED.calibration_error,
+             resolved_bets = EXCLUDED.resolved_bets,
+             realized_pnl = EXCLUDED.realized_pnl,
+             scored_at = NOW()`,
+          [newEntry.wallet, newEntry.displayName, newEntry.trustGrade, newEntry.trustScore, newEntry.brierSkillScore, newEntry.calibrationError, newEntry.resolvedBets, newEntry.realizedPnl],
+        );
+      } catch (err) {
+        console.error('[VIGIL Crawler] Incremental persist failed for', newEntry.wallet, ':', (err as Error).message);
+      }
+
+      // Every 10 scored, refresh in-memory skillLeaderboard so /discover/status
+      // and the live leaderboard page reflect crawl progress in real time.
+      if (entries.length % 10 === 0) {
+        skillLeaderboard = [...entries].sort((a, b) => b.trustScore - a.trustScore);
+      }
 
       // Alert on A or B grade discoveries — log to DB
       if (report.trustGrade === 'A' || report.trustGrade === 'B') {
