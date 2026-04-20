@@ -438,6 +438,138 @@ export async function computeSkillConsensus(conditionId: string): Promise<SkillC
   return result;
 }
 
+// ─── Divergence leaderboard ───────────────────────────────────────
+
+/**
+ * One row of the divergence leaderboard.
+ * Compact view of a consensus result — only the fields the leaderboard UI
+ * and API consumers need, so we don't ship 10 rows × 10 contributors of
+ * payload when a ranked list is all that's asked for.
+ */
+export interface DivergenceRow {
+  marketId: string;
+  marketTitle: string;
+  marketSlug: string;
+  impliedMarketP: number | null;
+  consensusP: number;
+  divergence: number;
+  divergenceAbs: number;
+  divergenceDirection: SkillConsensus['divergenceDirection'];
+  ci95: { low: number; high: number };
+  contributingWallets: number;
+  effectiveSampleSize: number;
+  totalSkillStake: number;
+  dataQuality: SkillConsensus['dataQuality'];
+  asOf: string;
+}
+
+export interface DivergenceLeaderboard {
+  asOf: string;
+  scanned: number;      // markets pulled from Gamma
+  qualified: number;    // markets that produced a consensus result
+  rows: DivergenceRow[];
+}
+
+const divergenceCache = new TTLCache<DivergenceLeaderboard>(300); // 5 min
+
+/** Turn a full consensus into a compact row. */
+function consensusToRow(c: SkillConsensus): DivergenceRow {
+  return {
+    marketId: c.marketId,
+    marketTitle: c.marketTitle,
+    marketSlug: c.marketSlug,
+    impliedMarketP: c.impliedMarketP,
+    consensusP: c.consensusP,
+    divergence: c.divergence,
+    divergenceAbs: Math.abs(c.divergence),
+    divergenceDirection: c.divergenceDirection,
+    ci95: c.ci95,
+    contributingWallets: c.contributingWallets.total,
+    effectiveSampleSize: c.effectiveSampleSize,
+    totalSkillStake: c.totalSkillStake,
+    dataQuality: c.dataQuality,
+    asOf: c.asOf,
+  };
+}
+
+/**
+ * Compute the divergence leaderboard: across the top `scanN` active Polymarket
+ * markets by volume, run skill-weighted consensus and return the `limit` with
+ * the largest |Δ| between consensus and market price.
+ *
+ * Gates (inherited from computeSkillConsensus + stricter cut for a *ranked* list):
+ *   - market must resolve to a consensus (not INSUFFICIENT_DATA / MARKET_NOT_FOUND)
+ *   - market must have a known price (impliedMarketP != null)
+ *   - dataQuality must be at least 'weak' (enforced by the 422 gate already)
+ *   - divergenceDirection != 'unknown'
+ *
+ * Results are sorted by |divergence| descending.
+ *
+ * Cached 5 min. Safe to hammer.
+ */
+export async function computeDivergenceLeaderboard(limit = 10, scanN = 40): Promise<DivergenceLeaderboard> {
+  const cacheKey = `leaderboard:${limit}:${scanN}`;
+  const cached = divergenceCache.get(cacheKey);
+  if (cached) return cached;
+
+  const start = Date.now();
+
+  // Pull top active markets by volume
+  let markets: any[] = [];
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const res = await fetch(
+      `${GAMMA_BASE}/markets?closed=false&limit=${scanN}&order=volumeNum&ascending=false`,
+      {
+        headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+        signal: ctrl.signal,
+      },
+    );
+    clearTimeout(timer);
+    if (res.ok) markets = await res.json();
+  } catch {
+    // fall through — empty result
+  }
+
+  const conditionIds = (markets || [])
+    .map((m: any) => m?.conditionId)
+    .filter((id: unknown): id is string => typeof id === 'string' && id.startsWith('0x'));
+
+  // Run consensus sequentially (each one fans out to 20 parallel wallet fetches
+  // under the hood — parallelising here would stampede the data-api).
+  // The per-market consensus cache means this is almost always warm.
+  const rows: DivergenceRow[] = [];
+  for (const conditionId of conditionIds) {
+    try {
+      const result = await computeSkillConsensus(conditionId);
+      if ('error' in result) continue;
+      if (result.impliedMarketP == null) continue;
+      if (result.divergenceDirection === 'unknown') continue;
+      rows.push(consensusToRow(result));
+    } catch {
+      // skip one bad market
+    }
+  }
+
+  rows.sort((a, b) => b.divergenceAbs - a.divergenceAbs);
+
+  const leaderboard: DivergenceLeaderboard = {
+    asOf: new Date().toISOString(),
+    scanned: conditionIds.length,
+    qualified: rows.length,
+    rows: rows.slice(0, limit),
+  };
+
+  divergenceCache.set(cacheKey, leaderboard);
+  console.log(
+    `[Divergence] Computed in ${Date.now() - start}ms — scanned ${leaderboard.scanned}, qualified ${leaderboard.qualified}, top Δ ${
+      leaderboard.rows[0] ? (leaderboard.rows[0].divergenceAbs * 100).toFixed(1) + 'pp' : 'n/a'
+    }`,
+  );
+  return leaderboard;
+}
+
 // ─── Pre-warm (optional cron) ─────────────────────────────────────
 
 /**

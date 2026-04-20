@@ -53,6 +53,9 @@ import {
   resolveMarketSlug,
   getConsensusCacheStats,
   warmConsensusCache,
+  computeDivergenceLeaderboard,
+  type DivergenceLeaderboard,
+  type DivergenceRow,
 } from './lib/consensus.js';
 import {
   getWalletProvenance,
@@ -522,6 +525,9 @@ app.get('/sitemap.xml', (_req, res) => {
     { loc: '/', priority: '1.0', changefreq: 'daily' },
     { loc: '/polymarket', priority: '0.9', changefreq: 'hourly' },
     { loc: '/polymarket/leaderboard', priority: '0.9', changefreq: 'hourly' },
+    { loc: '/polymarket/divergence', priority: '0.9', changefreq: 'hourly' },
+    { loc: '/polymarket/consensus/methodology', priority: '0.7', changefreq: 'weekly' },
+    { loc: '/polymarket/methodology', priority: '0.7', changefreq: 'weekly' },
     { loc: '/v1', priority: '0.7', changefreq: 'weekly' },
     { loc: '/api/pricing', priority: '0.6', changefreq: 'monthly' },
     { loc: '/privacy', priority: '0.3', changefreq: 'yearly' },
@@ -2673,6 +2679,200 @@ function consensusPage(r: import('./lib/consensus.js').SkillConsensus): string {
 }
 
 // ============================================================
+//  DIVERGENCE LEADERBOARD (v1.22.0)
+//  Across the top-volume active Polymarket markets, rank the ones where
+//  skill-weighted consensus diverges most from the market's implied price.
+//  This is the "where does the sharp money disagree with the crowd" view.
+// ============================================================
+
+/**
+ * GET /v1/polymarket/divergence
+ *   ?limit=<n>     (default 10, max 25)
+ *   ?scan=<n>      (default 40, max 100) — how many top-volume markets to scan
+ *
+ * Returns the ranked list of markets where the skill-weighted consensus
+ * probability diverges most from the current market-implied probability.
+ * Only surfaces markets that pass the consensus gates (≥5 wallets,
+ * effective sample ≥ 0.5, market price available).
+ */
+app.get('/v1/polymarket/divergence', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(25, parseInt(String(req.query.limit || '10'), 10) || 10));
+    const scan = Math.max(10, Math.min(100, parseInt(String(req.query.scan || '40'), 10) || 40));
+    const leaderboard = await computeDivergenceLeaderboard(limit, scan);
+    return res.json(leaderboard);
+  } catch (err) {
+    return res.status(502).json({ error: 'DIVERGENCE_UPSTREAM_ERROR', message: (err as Error).message });
+  }
+});
+
+/**
+ * HTML: /polymarket/divergence
+ * Public-facing divergence leaderboard. Every row links to the market's
+ * full consensus page. Header explains the gates. Footer carries the
+ * not-a-trade-signal disclaimer.
+ */
+app.get('/polymarket/divergence', async (_req, res) => {
+  try {
+    const leaderboard = await computeDivergenceLeaderboard(10, 40);
+    return res.type('html').send(divergencePage(leaderboard));
+  } catch (err) {
+    return res.status(502).type('html').send(errorPage((err as Error).message));
+  }
+});
+
+function divergencePage(lb: DivergenceLeaderboard): string {
+  const rowsHtml = lb.rows.length === 0
+    ? `<tr><td colspan="6" style="padding:40px;text-align:center;color:#707070">
+        No qualifying markets right now. Each row needs ≥5 graded wallets holding positions, effective sample ≥ 0.5, and a live market price.
+       </td></tr>`
+    : lb.rows.map((r, i) => divergenceRowHtml(r, i + 1)).join('');
+
+  const topDelta = lb.rows[0] ? (lb.rows[0].divergenceAbs * 100).toFixed(1) + 'pp' : '—';
+
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL Divergence — Where the Sharp Money Disagrees with Polymarket</title>
+<meta name="description" content="Live leaderboard of Polymarket markets where skill-weighted consensus (graded wallets only) diverges most from the market price. Top Δ right now: ${topDelta}.">
+<meta property="og:title" content="VIGIL Divergence — Where the Sharp Money Disagrees">
+<meta property="og:description" content="Polymarket markets ranked by |consensus − market| across ${lb.scanned} scanned, ${lb.qualified} qualified. Top divergence: ${topDelta}.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://vigilscore.xyz/polymarket/divergence">
+<meta property="og:image" content="https://vigilscore.xyz/static/og/vigil-og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://vigilscore.xyz/polymarket/divergence">
+<style>
+  *{box-sizing:border-box}
+  body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:24px;line-height:1.6}
+  .wrap{max-width:1080px;margin:0 auto}
+  .header{text-align:center;margin-bottom:32px}
+  .header a.brand{font-size:22px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none}
+  .header .sub{color:#707070;font-size:13px;margin-top:4px}
+  .kicker{font-size:11px;color:#707070;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  h1{font-size:28px;font-weight:800;margin:0 0 8px;letter-spacing:-0.5px}
+  .card{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:24px;margin-bottom:20px}
+  p{color:#ccc;font-size:14px;margin:0 0 10px}
+  .metabar{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:20px 0 8px}
+  .mcell{background:#0a0a0a;border:1px solid #1e1e1e;border-radius:2px;padding:14px}
+  .mcell .label{font-size:10px;color:#707070;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
+  .mcell .value{font-size:20px;font-weight:700;font-family:'JetBrains Mono','SF Mono',monospace}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}
+  th{text-align:left;padding:10px 12px;color:#707070;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;border-bottom:1px solid #1e1e1e;background:#0a0a0a}
+  td{padding:12px;border-bottom:1px solid #1e1e1e;vertical-align:top}
+  tr:hover td{background:#181818}
+  .rank{color:#555;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;width:32px;text-align:right}
+  .market{color:#fff;text-decoration:none;font-weight:600}
+  .market:hover{color:#3b82f6}
+  .pricecell{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:15px;white-space:nowrap}
+  .ci{color:#555;font-size:11px;font-family:'JetBrains Mono',monospace;margin-top:2px}
+  .deltacell{font-family:'JetBrains Mono',monospace;font-weight:800;font-size:16px;white-space:nowrap}
+  .tag{display:inline-block;padding:2px 8px;border-radius:2px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;border:1px solid}
+  .sampletag{color:#707070;font-size:11px;font-family:'JetBrains Mono',monospace}
+  .disclaimer{background:#0a0a0a;border:1px solid #b45309;border-radius:2px;padding:14px 18px;color:#fbbf24;font-size:13px;line-height:1.5;margin:20px 0}
+  .disclaimer strong{color:#fff}
+  .footer{text-align:center;margin-top:40px;color:#444;font-size:11px}
+  .footer a{color:#707070;text-decoration:none;margin:0 8px}
+  .footer a:hover{color:#fff}
+  @media (max-width:640px){
+    th.hide-sm, td.hide-sm{display:none}
+    .wrap{padding:0}
+  }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <a class="brand" href="/">VIGIL</a>
+    <div class="sub">Divergence Leaderboard · Polymarket</div>
+  </div>
+
+  <div class="card">
+    <div class="kicker">// live divergence leaderboard</div>
+    <h1>Where the sharp money disagrees with the crowd.</h1>
+    <p>
+      Every row is an active Polymarket market where the <strong>skill-weighted consensus</strong> (graded wallets only,
+      weighted by grade × √stake × exp(−days/30)) diverges from the current market-implied price. Ranked by |Δ|.
+      Each row links to the full consensus page with every contributing wallet.
+    </p>
+
+    <div class="disclaimer">
+      <strong>Not a trade signal.</strong> Divergence is a <em>measurement</em> — the gap between what well-calibrated
+      forecasters reveal through their positions and what the market is pricing. Skilled traders are wrong ~5% of the
+      time inside their 95% CI by construction. New information moves the market before it moves consensus. Read the
+      <a href="/polymarket/consensus/methodology" style="color:#fbbf24;text-decoration:underline">methodology</a> before acting on anything here.
+    </div>
+
+    <div class="metabar">
+      <div class="mcell"><div class="label">Scanned</div><div class="value">${lb.scanned}</div></div>
+      <div class="mcell"><div class="label">Qualified</div><div class="value">${lb.qualified}</div></div>
+      <div class="mcell"><div class="label">Top Δ</div><div class="value" style="color:#ef4444">${topDelta}</div></div>
+      <div class="mcell"><div class="label">As Of (UTC)</div><div class="value" style="font-size:14px">${new Date(lb.asOf).toUTCString().slice(5, 22)}</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th class="rank">#</th>
+          <th>Market</th>
+          <th>Crowd</th>
+          <th>Skilled Money</th>
+          <th>Δ</th>
+          <th class="hide-sm">Sample</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="kicker">// gates</div>
+    <p style="color:#999">
+      A market only qualifies for this ranking if at least <strong>5 graded wallets</strong> hold positions in it,
+      the <strong>effective sample size ≥ 0.5</strong> (Σ of grade × decay weights — roughly half an A-grade wallet's
+      worth of signal), and the market price is live. Below those thresholds we refuse to publish a number —
+      noise is worse than silence. Data refreshes every 5 minutes.
+    </p>
+  </div>
+
+  <div class="footer">
+    VIGIL is informational. Not financial advice. Not a registered broker-dealer or investment adviser.
+    <br>
+    <a href="/">Home</a> · <a href="/polymarket/leaderboard">Skill Leaderboard</a> · <a href="/polymarket/consensus/methodology">Consensus Methodology</a> · <a href="/polymarket/methodology">Grading Methodology</a> · <a href="/v1/polymarket/divergence">JSON</a>
+  </div>
+</div>
+</body></html>`;
+}
+
+function divergenceRowHtml(r: DivergenceRow, rank: number): string {
+  const marketPct = r.impliedMarketP == null ? '—' : (r.impliedMarketP * 100).toFixed(1) + '%';
+  const consPct = (r.consensusP * 100).toFixed(1) + '%';
+  const deltaPct = (r.divergenceAbs * 100).toFixed(1);
+  const signedDelta = (r.divergence >= 0 ? '+' : '−') + deltaPct + 'pp';
+
+  const divColor = r.divergenceAbs > 0.15 ? '#ef4444' : r.divergenceAbs > 0.07 ? '#f97316' : '#eab308';
+  const dirLabel = r.divergenceDirection === 'market_overpriced' ? 'OVERPRICED'
+    : r.divergenceDirection === 'market_underpriced' ? 'UNDERPRICED'
+    : 'ALIGNED';
+
+  const qualityLabel = { strong: 'STRONG', moderate: 'MODERATE', weak: 'WEAK', insufficient: 'INSUFFICIENT' }[r.dataQuality] || 'UNKNOWN';
+  const qualityColor = r.dataQuality === 'strong' ? '#10b981' : r.dataQuality === 'moderate' ? '#eab308' : '#f97316';
+
+  const title = r.marketTitle || r.marketSlug || r.marketId.slice(0, 12) + '…';
+  const href = `/polymarket/markets/${r.marketId}/consensus`;
+
+  return `<tr>
+    <td class="rank">${rank}</td>
+    <td><a class="market" href="${href}">${hEsc(title)}</a></td>
+    <td class="pricecell" style="color:#999">${marketPct}</td>
+    <td class="pricecell" style="color:${divColor}">${consPct}<div class="ci">CI ${(r.ci95.low * 100).toFixed(1)}–${(r.ci95.high * 100).toFixed(1)}</div></td>
+    <td class="deltacell" style="color:${divColor}">${signedDelta}<div style="margin-top:4px"><span class="tag" style="color:${divColor};border-color:${divColor}40;background:${divColor}15">${dirLabel}</span></div></td>
+    <td class="hide-sm sampletag">${r.contributingWallets}w · es ${r.effectiveSampleSize.toFixed(1)}<div style="margin-top:4px"><span class="tag" style="color:${qualityColor};border-color:${qualityColor}40;background:${qualityColor}15">${qualityLabel}</span></div></td>
+  </tr>`;
+}
+
+// ============================================================
 //  WALLET DISCOVERY & SKILL LEADERBOARD (v1.18.0)
 //  Crawl resolved markets, discover skilled wallets, surface A/B grades
 // ============================================================
@@ -3728,10 +3928,13 @@ async function runPrescoringCron(): Promise<void> {
         wallet.grade = report.trustGrade;
         wallet.score = report.trustScore;
         wallet.resolved = report.raw.resolvedBets;
+        wallet.winRate = report.raw.winRate ?? 0;
+        wallet.bss = report.calibrationReport.brierSkillScore ?? 0;
         wallet.calibration = Math.round(report.calibrationReport.calibrationError * 1000) / 10; // as percentage e.g. 12.3
         if (report.displayName && !report.displayName.startsWith('0x')) wallet.name = report.displayName;
 
-        console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore} cal=${wallet.calibration}%`);
+        const bssPct = (wallet.bss * 100).toFixed(1);
+        console.log(`[CRON] Pre-scored ${wallet.name}: ${report.trustGrade}/${report.trustScore} BSS=${bssPct}% win=${(wallet.winRate * 100).toFixed(1)}% resolved=${wallet.resolved}`);
       }
     } catch (err) {
       console.error(`[CRON] Failed to pre-score ${wallet.name} (${wallet.wallet}):`, (err as Error).message);
@@ -3745,18 +3948,20 @@ async function runPrescoringCron(): Promise<void> {
 }
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable via cron)
-// Polymarket Top 10 by All-Time PnL — live VIGIL v1.22 scores (2026-04-19)
-const TOP_WALLETS: Array<{ wallet: string; name: string; pnl: number; grade: string; score: number; resolved: number; calibration: number }> = [
-  { wallet: '0x56687bf447db6ffa42ffe2204a05edaa20f55839', name: 'Theo4', pnl: 22053934, grade: 'D', score: 37, resolved: 5, calibration: 0 },
-  { wallet: '0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf', name: 'Fredi9999', pnl: 16619507, grade: 'D', score: 44, resolved: 11, calibration: 0 },
-  { wallet: '0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee', name: 'kch123', pnl: 11866256, grade: 'D', score: 46, resolved: 46, calibration: 0 },
-  { wallet: '0x78b9ac44a6d7d7a076c14e0ad518b301b63c6b76', name: 'Len9311238', pnl: 8709973, grade: 'F', score: 20, resolved: 0, calibration: 0 },
-  { wallet: '0xd235973291b2b75ff4070e9c0b01728c520b0f29', name: 'zxgngl', pnl: 7807266, grade: 'F', score: 15, resolved: 2, calibration: 0 },
-  { wallet: '0x863134d00841b2e200492805a01e1e2f5defaa53', name: 'RepTrump', pnl: 7532410, grade: 'F', score: 20, resolved: 0, calibration: 0 },
-  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 7465792, grade: 'D', score: 43, resolved: 950, calibration: 0 },
-  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 6100031, grade: 'D', score: 41, resolved: 920, calibration: 0 },
-  { wallet: '0x8119010a6e589062aa03583bb3f39ca632d9f887', name: 'PrincessCaro', pnl: 6083643, grade: 'F', score: 27, resolved: 5, calibration: 0 },
-  { wallet: '0xe9ad918c7678cd38b12603a762e638a5d1ee7091', name: 'walletmobile', pnl: 5942685, grade: 'F', score: 13, resolved: 0, calibration: 0 },
+// Polymarket Top 10 by All-Time PnL — authoritative seed from live /v1/polymarket/:wallet pass on 2026-04-20T21:11:26Z.
+// winRate and bss are snapshotted from that run; the cron refreshes all four derived fields (grade/score/calibration/winRate/bss)
+// every scoring cycle, so the leaderboard card and the grade pages stay coherent.
+const TOP_WALLETS: Array<{ wallet: string; name: string; pnl: number; grade: string; score: number; resolved: number; winRate: number; bss: number; calibration: number }> = [
+  { wallet: '0x56687bf447db6ffa42ffe2204a05edaa20f55839', name: 'Theo4', pnl: 22053934, grade: 'D', score: 37, resolved: 14, winRate: 0.929, bss: -4.6001, calibration: 52.2 },
+  { wallet: '0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf', name: 'Fredi9999', pnl: 16619507, grade: 'D', score: 41, resolved: 40, winRate: 0.600, bss: -0.2107, calibration: 27.4 },
+  { wallet: '0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee', name: 'kch123', pnl: 11866256, grade: 'D', score: 38, resolved: 338, winRate: 0.006, bss: -31.3439, calibration: 39.2 },
+  { wallet: '0x78b9ac44a6d7d7a076c14e0ad518b301b63c6b76', name: 'Len9311238', pnl: 8709973, grade: 'D', score: 38, resolved: 7, winRate: 1.000, bss: -0.0952, calibration: 51.2 },
+  { wallet: '0xd235973291b2b75ff4070e9c0b01728c520b0f29', name: 'zxgngl', pnl: 7807266, grade: 'F', score: 31, resolved: 6, winRate: 0.833, bss: -0.4773, calibration: 34.3 },
+  { wallet: '0x863134d00841b2e200492805a01e1e2f5defaa53', name: 'RepTrump', pnl: 7532410, grade: 'F', score: 31, resolved: 8, winRate: 0.875, bss: -1.4238, calibration: 40.9 },
+  { wallet: '0x2005d16a84ceefa912d4e380cd32e7ff827875ea', name: 'RN1', pnl: 7465792, grade: 'D', score: 45, resolved: 964, winRate: 0.062, bss: -3.6104, calibration: 36.7 },
+  { wallet: '0x204f72f35326db932158cba6adff0b9a1da95e14', name: 'swisstony', pnl: 6100031, grade: 'C', score: 57, resolved: 508, winRate: 0.559, bss: -0.5292, calibration: 31.3 },
+  { wallet: '0x8119010a6e589062aa03583bb3f39ca632d9f887', name: 'PrincessCaro', pnl: 6083643, grade: 'D', score: 35, resolved: 14, winRate: 0.714, bss: -0.2597, calibration: 24.5 },
+  { wallet: '0xe9ad918c7678cd38b12603a762e638a5d1ee7091', name: 'walletmobile', pnl: 5942685, grade: 'F', score: 18, resolved: 0, winRate: 0.000, bss: -1.0000, calibration: 100.0 },
 ];
 
 // Seed username cache from leaderboard on startup
@@ -3772,13 +3977,22 @@ function renderHomepage(): string {
     const gc = gradeColor(w.grade);
     const pnlStr = w.pnl >= 0 ? `+$${w.pnl.toLocaleString()}` : `-$${Math.abs(w.pnl).toLocaleString()}`;
     const pnlColor = w.pnl >= 0 ? '#10b981' : '#ef4444';
+    const bssPctRaw = w.bss * 100;
+    const bssPct = Math.max(-9999, Math.min(9999, bssPctRaw));
+    const bssCell = w.resolved >= 5
+      ? `<span style="color:${bssPctRaw >= 0 ? '#10b981' : '#ef4444'};font-weight:600">${bssPctRaw >= 0 ? '+' : ''}${bssPct.toFixed(0)}%</span>`
+      : `<span style="color:#444">—</span>`;
+    const winCell = w.resolved > 0
+      ? `${(w.winRate * 100).toFixed(1)}%`
+      : `<span style="color:#444">—</span>`;
     return `<tr onclick="window.location='/polymarket/${w.wallet}'" style="cursor:pointer">
 <td style="color:#555">${i + 1}</td>
 <td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#444;font-family:monospace">${w.wallet.slice(0,8)}...${w.wallet.slice(-4)}</span></td>
 <td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
 <td><span style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${w.grade}</span></td>
 <td style="color:#fff;font-weight:600">${w.score}</td>
-<td style="color:#e8e8e8">${w.calibration > 0 ? w.calibration.toFixed(1) + '%' : '<span style="color:#444">—</span>'}</td>
+<td style="font-family:'JetBrains Mono',monospace">${bssCell}</td>
+<td style="color:#e8e8e8">${winCell}</td>
 <td style="color:#707070">${w.resolved}</td>
 </tr>`;
   }).join('');
@@ -4037,6 +4251,17 @@ function doSubscribe(e) {
   </div>
 </div>
 
+<a href="/polymarket/divergence" style="display:block;text-decoration:none;margin-bottom:48px;padding:28px 32px;background:linear-gradient(135deg,#0f0f0f 0%,#141414 100%);border:1px solid #2a2a2a;border-left:3px solid #ef4444;border-radius:2px;transition:border-color .2s,background .2s" onmouseover="this.style.borderColor='#ef4444';this.style.background='#141414'" onmouseout="this.style.borderColor='#2a2a2a';this.style.background='linear-gradient(135deg,#0f0f0f 0%,#141414 100%)'">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap">
+    <div style="flex:1;min-width:260px">
+      <div style="font-size:10px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px">// live · divergence leaderboard</div>
+      <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:6px;letter-spacing:-0.3px">Where the sharp money disagrees with the crowd.</div>
+      <p style="font-size:14px;color:#999;margin:0;line-height:1.55">Active Polymarket markets ranked by the gap between <strong style="color:#fff">skill-weighted consensus</strong> (graded wallets only, weighted by calibration × √stake × recency) and the live market price. Updates every 5 minutes.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;color:#ef4444;font-weight:700;font-family:'JetBrains Mono','SF Mono',monospace;font-size:13px;letter-spacing:2px;text-transform:uppercase;white-space:nowrap">See Rankings →</div>
+  </div>
+</a>
+
 ${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-bottom:48px;background:#0a0a0a;border-color:#1e1e1e">
   <div class="sec-hdr">VIGIL Elite — A & B Grade Wallets</div>
   <p style="font-size:14px;color:#707070;margin-bottom:16px">The only wallets that scored A or B out of 600+ scanned. These traders show real forecasting skill — not luck, not speed, not size. <a href="/polymarket/leaderboard" style="color:#00d4aa">Full leaderboard →</a></p>
@@ -4058,7 +4283,7 @@ ${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-b
 
 <div class="card" style="overflow-x:auto">
   <div class="sec-hdr">Polymarket Top 10 by PnL — VIGIL Scored</div>
-  <p style="font-size:14px;color:#707070;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Not a single one scored above D. Grades update automatically.</p>
+  <p style="font-size:14px;color:#707070;margin-bottom:16px">These are the highest-earning wallets on Polymarket by all-time PnL. Nine of ten graded D or F. All ten score negative Brier Skill — worse than predicting the base rate every time. Grades update automatically.</p>
   <table style="width:100%;border-collapse:collapse;font-size:14px">
   <tr style="border-bottom:1px solid #1e1e1e">
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">#</th>
@@ -4066,7 +4291,8 @@ ${skillTop10Rows.length > 0 ? `<div class="card" style="overflow-x:auto;margin-b
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">PnL</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Grade</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Score</th>
-    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Cal Error</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">BSS</th>
+    <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Win</th>
     <th style="text-align:left;padding:8px 6px;color:#555;font-size:11px;text-transform:uppercase">Resolved</th>
   </tr>
   ${leaderboardRows}
