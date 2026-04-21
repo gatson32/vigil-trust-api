@@ -33,11 +33,16 @@ export const GRADE_WEIGHTS: Record<string, number> = {
 const DECAY_HALF_LIFE_DAYS = 30;
 
 /** Minimum effective sample size (sum of grade × decay weights) to surface
- *  consensus. 0.5 ≈ "at least half an A-grade wallet's worth of signal." */
-const MIN_EFFECTIVE_SAMPLE = 0.5;
+ *  consensus. 0.05 lets a single C-grade or a few D-grades qualify — paired
+ *  with dataQuality="weak" in the UI so users see the low-confidence warning.
+ *  Will be raised back to 0.5 once the discovery crawler populates the full
+ *  graded-wallet universe. */
+const MIN_EFFECTIVE_SAMPLE = 0.05;
 
-/** Minimum number of distinct contributing wallets. */
-const MIN_WALLETS = 5;
+/** Minimum number of distinct contributing wallets.
+ *  Softened from 5 → 2 for launch. Markets with 2+ graded wallets qualify
+ *  and show as dataQuality="weak" in the divergence leaderboard. */
+const MIN_WALLETS = 2;
 
 // ─── Types ─────────────────────────────────────────────────────────
 

@@ -3970,6 +3970,31 @@ async function runPrescoringCron(): Promise<void> {
   }
 
   console.log(`[CRON] Pre-scoring complete. Cached ${prescoredCache.size} wallets.`);
+
+  // v1.21.2: After prescore completes, push the freshly scored TOP_WALLETS into
+  // the skill leaderboard so consensus/divergence endpoints have graded wallets
+  // to aggregate even if the discovery crawler is stuck or hasn't run yet.
+  try {
+    const leaderboardEntries: LeaderboardEntry[] = TOP_WALLETS
+      .filter(w => w.resolved > 0)
+      .map(w => ({
+        wallet: w.wallet,
+        displayName: w.name,
+        trustScore: w.score,
+        trustGrade: w.grade,
+        brierSkillScore: w.bss,
+        calibrationError: w.calibration / 100,
+        resolvedBets: w.resolved,
+        winRate: w.winRate,
+        realizedPnl: w.pnl,
+        scoredAt: new Date().toISOString(),
+      }));
+    const merged = seedSkillLeaderboard(leaderboardEntries);
+    resetCrawlInProgress();
+    console.log(`[CRON] Skill leaderboard now has ${merged} wallets (seeded from prescored TOP_WALLETS + any existing crawl data)`);
+  } catch (err) {
+    console.error('[CRON] Failed to seed skill leaderboard from TOP_WALLETS:', err);
+  }
 }
 
 // Pre-scored top Polymarket wallets (hardcoded, refreshable via cron)
