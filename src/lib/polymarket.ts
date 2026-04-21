@@ -1326,6 +1326,29 @@ export function getSkillLeaderboard(): LeaderboardEntry[] {
   return skillLeaderboard;
 }
 
+/**
+ * Seed the in-memory skill leaderboard directly (no DB, no crawler).
+ * Used as a cold-boot fallback when the crawler is stuck or the
+ * leaderboard_cache table is empty. Merges by wallet — existing entries
+ * are preserved if not in the seed list.
+ */
+export function seedSkillLeaderboard(entries: LeaderboardEntry[]): number {
+  const byWallet = new Map<string, LeaderboardEntry>();
+  for (const e of skillLeaderboard) byWallet.set(e.wallet.toLowerCase(), e);
+  for (const e of entries) byWallet.set(e.wallet.toLowerCase(), e);
+  skillLeaderboard = [...byWallet.values()].sort((a, b) => b.trustScore - a.trustScore);
+  lastCrawlTime = new Date().toISOString();
+  return skillLeaderboard.length;
+}
+
+/**
+ * Reset the crawl-in-progress flag. For recovery when a previous crawl
+ * crashed without clearing state.
+ */
+export function resetCrawlInProgress(): void {
+  crawlInProgress = false;
+}
+
 /** v1.20.2: Load leaderboard from database on boot — survives deploys */
 export async function loadLeaderboardFromDb(): Promise<number> {
   try {

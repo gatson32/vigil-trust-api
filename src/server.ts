@@ -46,6 +46,8 @@ import {
   getSkillLeaderboard,
   getCrawlerStatus,
   loadLeaderboardFromDb,
+  seedSkillLeaderboard,
+  resetCrawlInProgress,
   type LeaderboardEntry,
 } from './lib/polymarket.js';
 import {
@@ -3789,11 +3791,34 @@ async function start() {
     }
 
     // v1.20.2: Load full leaderboard from DB so it's instant after deploys
+    let loaded = 0;
     try {
-      const loaded = await loadLeaderboardFromDb();
+      loaded = await loadLeaderboardFromDb();
       console.log(`[BOOT] Leaderboard: ${loaded} wallets loaded from database`);
     } catch (err) {
       console.error('[BOOT] Failed to load leaderboard from DB:', err);
+    }
+
+    // v1.21.1: Fallback seed from TOP_WALLETS if DB load returned empty.
+    // Guarantees the skill leaderboard has real graded wallets even when the
+    // crawler hasn't run and leaderboard_cache is empty. Unblocks consensus
+    // and divergence endpoints on cold boots.
+    if (loaded === 0) {
+      const seedEntries: LeaderboardEntry[] = TOP_WALLETS.map((w) => ({
+        wallet: w.wallet,
+        displayName: w.name,
+        trustScore: w.score,
+        trustGrade: w.grade,
+        brierSkillScore: w.bss,
+        calibrationError: w.calibration / 100,
+        resolvedBets: w.resolved,
+        winRate: w.winRate,
+        realizedPnl: w.pnl,
+        scoredAt: new Date().toISOString(),
+      }));
+      const seeded = seedSkillLeaderboard(seedEntries);
+      resetCrawlInProgress();
+      console.log(`[BOOT] Leaderboard cold-boot fallback: seeded ${seeded} wallets from TOP_WALLETS + cleared stale crawl flag`);
     }
 
     // Load discovery alerts so homepage elite table works immediately (before crawler runs)
