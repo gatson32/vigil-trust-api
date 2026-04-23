@@ -64,6 +64,13 @@ import {
   isBasescanConfigured,
   quickSybilCheck,
 } from './lib/basescan.js';
+import {
+  labelFromReport,
+  lookupLabels,
+  walletsWithLabel,
+  labelStats,
+  type LabelCategory,
+} from './lib/labels.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -1946,6 +1953,9 @@ app.get('/v1/polymarket/:wallet', async (req, res, next) => {
       cachedAt: Date.now(),
     });
 
+    // v1.22.7 — Label on every live score
+    try { labelFromReport(report); } catch {}
+
     addRecentScore(report);
     return res.json(report);
   } catch (err) {
@@ -3094,6 +3104,43 @@ function divergenceRowHtml(r: DivergenceRow, rank: number): string {
 // ============================================================
 
 // JSON: Skill-based leaderboard — top wallets ranked by actual forecasting ability
+// ============================================================
+//  WALLET LABELS API (v1.22.7) — the Nansen moat
+// ============================================================
+// Public (free tier): single-wallet lookup + category stats.
+// Pro tier: reverse lookup (wallets with label X), bulk lookups.
+// Register the STATIC paths (/stats, /search) BEFORE the :wallet param route
+// so Express matches them first.
+
+app.get('/v1/labels/stats', (_req, res) => {
+  res.json(labelStats());
+});
+
+// Reverse lookup: Pro+ gated, since scanning the full label graph is
+// the actual product Elite customers pay for.
+app.get('/v1/labels/search', (req, res) => {
+  const record = requireApiKey(req, res);
+  if (!record) return;
+  if (record.tier === 'free') {
+    return res.status(403).json({ error: 'TIER_REQUIRED', message: 'Reverse label lookup requires Pro ($299/mo) or Enterprise.' });
+  }
+  const category = String(req.query.category || '').trim() as LabelCategory;
+  const label = String(req.query.label || '').trim();
+  if (!category || !label) {
+    return res.status(400).json({ error: 'MISSING_PARAMS', message: 'Provide ?category=<entity|archetype|relationship|quality|venue|flag>&label=<value>' });
+  }
+  const wallets = walletsWithLabel(category, label);
+  res.json({ category, label, count: wallets.length, wallets: wallets.slice(0, 500) });
+});
+
+app.get('/v1/labels/:wallet', (req, res) => {
+  const wallet = String(req.params.wallet || '').trim().toLowerCase();
+  if (!wallet || !wallet.startsWith('0x') || wallet.length !== 42) {
+    return res.status(400).json({ error: 'INVALID_WALLET', message: 'Provide a 0x...40 wallet address.' });
+  }
+  return res.json(lookupLabels(wallet));
+});
+
 app.get('/v1/polymarket/leaderboard/skill', (_req, res) => {
   const leaderboard = getSkillLeaderboard();
   const status = getCrawlerStatus();
@@ -4465,6 +4512,10 @@ async function runPrescoringCron(): Promise<void> {
           ...report,
           cachedAt: Date.now(),
         });
+
+        // v1.22.7 — Derive wallet labels from the fresh report (entity handle,
+        // grade quality tags, archetypes, flags). Idempotent; replaces prior.
+        try { labelFromReport(report); } catch (e) { console.warn('[LABELS] labelFromReport failed:', (e as Error).message); }
 
         // Update TOP_WALLETS entry with fresh data
         wallet.grade = report.trustGrade;
