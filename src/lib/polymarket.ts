@@ -130,9 +130,21 @@ export interface PolymarketRiskReport {
   // Confidence intervals
   confidence: {
     level: 'high' | 'medium' | 'low' | 'very_low';
-    margin: number;        // ± points
+    margin: number;        // ± points (legacy heuristic — kept for UI back-compat)
     resolvedBets: number;  // how many resolved bets the score is based on
     description: string;   // human-readable, e.g. "D/41 ± 3 (high confidence)"
+    // v1.22.0: Bootstrap-derived 95% CI on the composite trustScore.
+    // Resamples per-bet squared errors (1000 iterations), recomputes brier,
+    // projects back through the calibration dimension to a score band.
+    // Insufficient Data grade triggers when resolvedBets < 30 OR CI span >= 20.
+    ci95: {
+      scoreLow: number;
+      scoreHigh: number;
+      gradeLow: 'A' | 'B' | 'C' | 'D' | 'F' | 'INS';
+      gradeHigh: 'A' | 'B' | 'C' | 'D' | 'F' | 'INS';
+      iterations: number;
+      insufficientData: boolean;  // true = show "INS" instead of a letter grade
+    };
   };
 
   // Calibration deep-dive (the secret sauce)
@@ -763,6 +775,100 @@ function tierFromGrade(grade: string): 'SHARP' | 'SOLID' | 'DEVELOPING' | 'RISKY
   }
 }
 
+/**
+ * v1.22.0 — Bootstrap 95% CI on the composite trustScore.
+ *
+ * Why this exists: the CRO failure-mode review flagged letter-grades-without-CIs
+ * as the one thing that guarantees launch failure. Any quant who bootstraps
+ * our data and shows a "B" trader and a "C+" trader overlapping at 95% CI
+ * destroys the methodology. This function makes the CI a first-class output.
+ *
+ * Method: resample per-bet squared errors N times with replacement (non-
+ * parametric bootstrap), recompute brier score each iteration, project the
+ * brier delta through the calibration-dimension weight to get a score band.
+ * Other dimensions are held at their point estimate — calibration is the
+ * largest variance driver and the one a critic will attack first.
+ *
+ * Insufficient-Data rule: if resolvedBets < 30 OR the CI span is >= 20 points
+ * (more than one full grade-width), the grade is reported as "INS" to prevent
+ * overstated precision.
+ */
+function bootstrapTrustScoreCI(
+  bets: ResolvedBet[],
+  pointScore: number,
+  pointBrier: number,
+  calibrationDimPoint: number,
+  iterations = 1000,
+): PolymarketRiskReport['confidence']['ci95'] {
+  const n = bets.length;
+  // Floor for insufficient data: 30 resolved bets is the minimum where a
+  // bootstrap CI on Brier becomes meaningfully narrower than the grade-width.
+  if (n < 30) {
+    return {
+      scoreLow: Math.max(0, pointScore - 25),
+      scoreHigh: Math.min(100, pointScore + 25),
+      gradeLow: 'INS',
+      gradeHigh: 'INS',
+      iterations: 0,
+      insufficientData: true,
+    };
+  }
+
+  // Per-bet squared error = (impliedProb - outcome)^2
+  const errors = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const outcome = bets[i].correct ? 1 : 0;
+    errors[i] = (bets[i].impliedProb - outcome) ** 2;
+  }
+
+  // Resample with replacement, compute mean brier each iteration
+  const brierSamples = new Float64Array(iterations);
+  for (let it = 0; it < iterations; it++) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      sum += errors[Math.floor(Math.random() * n)];
+    }
+    brierSamples[it] = sum / n;
+  }
+
+  // Sort to get percentiles
+  const sorted = Array.from(brierSamples).sort((a, b) => a - b);
+  const brierLow = sorted[Math.floor(iterations * 0.025)];
+  const brierHigh = sorted[Math.floor(iterations * 0.975)];
+
+  // Project brier delta -> calibration-dimension delta -> score delta.
+  // calSkill ≈ (1 - 2*calErr)*100; calErr scales with brier.
+  // dCalibrationDim/dBrier ≈ -200 (roughly, within the linear regime we operate in).
+  // Then score weight on calibration = 0.25.
+  const BRIER_TO_CALDIM = -200;
+  const CAL_WEIGHT = 0.25;
+  const dScore_dBrier = BRIER_TO_CALDIM * CAL_WEIGHT; // ≈ -50
+
+  const deltaLow = (brierLow - pointBrier) * dScore_dBrier;   // higher brier = lower score
+  const deltaHigh = (brierHigh - pointBrier) * dScore_dBrier;
+
+  // deltaLow corresponds to high brier -> negative score delta; deltaHigh positive.
+  // But since dScore_dBrier is negative, deltaLow from brierLow (lower brier = better) is POSITIVE.
+  // So scoreHigh = pointScore + deltaLow, scoreLow = pointScore + deltaHigh.
+  const scoreLow = Math.max(0, Math.round(pointScore + Math.min(deltaLow, deltaHigh)));
+  const scoreHigh = Math.min(100, Math.round(pointScore + Math.max(deltaLow, deltaHigh)));
+
+  const span = scoreHigh - scoreLow;
+  const insufficientData = span >= 20;  // wider than one full grade bucket
+
+  return {
+    scoreLow,
+    scoreHigh,
+    gradeLow: insufficientData ? 'INS' : gradeFromScore(scoreLow),
+    gradeHigh: insufficientData ? 'INS' : gradeFromScore(scoreHigh),
+    iterations,
+    insufficientData,
+  };
+  // Suppress unused warning — calibrationDimPoint reserved for future
+  // per-dimension CI expansion (v1.23).
+  void calibrationDimPoint;
+}
+
 export async function scorePolymarketTrader(wallet: string): Promise<PolymarketRiskReport | null> {
   // Fetch trades, positions, AND on-chain data in parallel
   // Polymarket runs on Polygon (chain 137), not Base
@@ -1230,7 +1336,18 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
     confidenceMargin = 25;
   }
 
-  const confidenceDescription = `${trustGrade}/${gatedScore} ± ${confidenceMargin} (${confidenceLevel} confidence, ${resolvedBets.length} resolved bets)`;
+  // v1.22.0 — Bootstrap CI95 on the composite score.
+  const ci95 = bootstrapTrustScoreCI(
+    resolvedBets,
+    gatedScore,
+    calibrationReport.brierScore,
+    calibrationDim,
+    1000,
+  );
+
+  const confidenceDescription = ci95.insufficientData
+    ? `INS (${resolvedBets.length} resolved bets — insufficient data for grade CI)`
+    : `${trustGrade}/${gatedScore} [CI95: ${ci95.gradeLow}→${ci95.gradeHigh}, ${ci95.scoreLow}-${ci95.scoreHigh}] (${resolvedBets.length} resolved bets)`;
 
   // Identity — clean up Polymarket's raw name field
   // Polymarket sometimes returns names as "0xADBA...b0Af-1775745654746" (address-timestamp)
@@ -1272,6 +1389,7 @@ export async function scorePolymarketTrader(wallet: string): Promise<PolymarketR
       margin: confidenceMargin,
       resolvedBets: resolvedBets.length,
       description: confidenceDescription,
+      ci95,
     },
     calibrationReport,
     onChain: onChainBlock,
@@ -1313,6 +1431,15 @@ export interface LeaderboardEntry {
   winRate: number;
   realizedPnl: number;
   scoredAt: string;
+  // v1.22.0 — Bootstrap CI95 on the composite score. Required for any grade
+  // to be displayed publicly; absence or insufficientData=true means "INS".
+  ci95?: {
+    scoreLow: number;
+    scoreHigh: number;
+    gradeLow: string;   // 'A'|'B'|'C'|'D'|'F'|'INS'
+    gradeHigh: string;
+    insufficientData: boolean;
+  };
 }
 
 // In-memory leaderboard store (persists across requests, rebuilt by cron)
@@ -1529,6 +1656,13 @@ export async function buildSkillLeaderboard(
         winRate: report.raw.winRate,
         realizedPnl: report.raw.realizedPnl,
         scoredAt: report.scoredAt,
+        ci95: {
+          scoreLow: report.confidence.ci95.scoreLow,
+          scoreHigh: report.confidence.ci95.scoreHigh,
+          gradeLow: report.confidence.ci95.gradeLow,
+          gradeHigh: report.confidence.ci95.gradeHigh,
+          insufficientData: report.confidence.ci95.insufficientData,
+        },
       };
       entries.push(newEntry);
 

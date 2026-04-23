@@ -3974,24 +3974,44 @@ async function runPrescoringCron(): Promise<void> {
   // v1.21.2: After prescore completes, push the freshly scored TOP_WALLETS into
   // the skill leaderboard so consensus/divergence endpoints have graded wallets
   // to aggregate even if the discovery crawler is stuck or hasn't run yet.
+  // v1.22.0: Pull bootstrap CI95 from prescoredCache so leaderboard entries
+  // carry grade bands (required for public display; "INS" when insufficient).
   try {
     const leaderboardEntries: LeaderboardEntry[] = TOP_WALLETS
       .filter(w => w.resolved > 0)
-      .map(w => ({
-        wallet: w.wallet,
-        displayName: w.name,
-        trustScore: w.score,
-        trustGrade: w.grade,
-        brierSkillScore: w.bss,
-        calibrationError: w.calibration / 100,
-        resolvedBets: w.resolved,
-        winRate: w.winRate,
-        realizedPnl: w.pnl,
-        scoredAt: new Date().toISOString(),
-      }));
+      .map(w => {
+        const cached = prescoredCache.get(w.wallet.toLowerCase());
+        const ci95 = cached?.confidence?.ci95 ?? {
+          scoreLow: Math.max(0, w.score - 25),
+          scoreHigh: Math.min(100, w.score + 25),
+          gradeLow: 'INS',
+          gradeHigh: 'INS',
+          insufficientData: true,
+        };
+        return {
+          wallet: w.wallet,
+          displayName: w.name,
+          trustScore: w.score,
+          trustGrade: w.grade,
+          brierSkillScore: w.bss,
+          calibrationError: w.calibration / 100,
+          resolvedBets: w.resolved,
+          winRate: w.winRate,
+          realizedPnl: w.pnl,
+          scoredAt: new Date().toISOString(),
+          ci95: {
+            scoreLow: ci95.scoreLow,
+            scoreHigh: ci95.scoreHigh,
+            gradeLow: ci95.gradeLow,
+            gradeHigh: ci95.gradeHigh,
+            insufficientData: ci95.insufficientData,
+          },
+        };
+      });
     const merged = seedSkillLeaderboard(leaderboardEntries);
     resetCrawlInProgress();
-    console.log(`[CRON] Skill leaderboard now has ${merged} wallets (seeded from prescored TOP_WALLETS + any existing crawl data)`);
+    const insCount = leaderboardEntries.filter(e => e.ci95?.insufficientData).length;
+    console.log(`[CRON] Skill leaderboard now has ${merged} wallets (${insCount} INS, ${merged - insCount} with bootstrap CI)`);
   } catch (err) {
     console.error('[CRON] Failed to seed skill leaderboard from TOP_WALLETS:', err);
   }
@@ -4022,6 +4042,15 @@ for (const w of TOP_WALLETS) {
 }
 
 function renderHomepage(): string {
+  // v1.22.0 — Pull bootstrap CI95 per wallet for public grade display.
+  // Build a map of wallet → ci95 from the live skill leaderboard (or
+  // prescoredCache as fallback) so each row shows its CI band.
+  const skillLb = getSkillLeaderboard();
+  const ciByWallet = new Map<string, { scoreLow: number; scoreHigh: number; gradeLow: string; gradeHigh: string; insufficientData: boolean }>();
+  for (const e of skillLb) {
+    if (e.ci95) ciByWallet.set(e.wallet.toLowerCase(), e.ci95);
+  }
+
   // Build leaderboard rows
   const leaderboardRows = TOP_WALLETS.map((w, i) => {
     const gc = gradeColor(w.grade);
@@ -4035,12 +4064,26 @@ function renderHomepage(): string {
     const winCell = w.resolved > 0
       ? `${(w.winRate * 100).toFixed(1)}%`
       : `<span style="color:#444">—</span>`;
+
+    // v1.22.0 — Grade cell with bootstrap CI95 band.
+    // INS when: resolved < 30 OR CI span >= 20 pts.
+    const ci = ciByWallet.get(w.wallet.toLowerCase());
+    const pre = prescoredCache.get(w.wallet.toLowerCase());
+    const ciData = ci ?? pre?.confidence?.ci95;
+    const insufficient = !ciData || ciData.insufficientData || w.resolved < 30;
+    const gradeCell = insufficient
+      ? `<span title="Insufficient data for grade CI (min 30 resolved bets, CI95 span < 20pts)" style="display:inline-block;padding:0 8px;height:28px;border-radius:2px;background:#55555518;color:#888;text-align:center;line-height:28px;font-weight:700;font-size:11px;border:1px solid #55555530;font-family:'JetBrains Mono',monospace;letter-spacing:0.5px">INS</span>`
+      : `<span title="Bootstrap CI95: ${ciData.gradeLow}→${ciData.gradeHigh} (${ciData.scoreLow}-${ciData.scoreHigh})" style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${w.grade}</span>`;
+    const scoreCell = insufficient
+      ? `<span style="color:#666;font-size:12px">—</span>`
+      : `<span style="color:#fff;font-weight:600">${w.score}</span><br/><span style="font-size:10px;color:#555;font-family:monospace">[${ciData.scoreLow}–${ciData.scoreHigh}]</span>`;
+
     return `<tr onclick="window.location='/polymarket/${w.wallet}'" style="cursor:pointer">
 <td style="color:#555">${i + 1}</td>
 <td><span style="color:#fff;font-weight:600">${hEsc(w.name)}</span><br/><span style="font-size:11px;color:#444;font-family:monospace">${w.wallet.slice(0,8)}...${w.wallet.slice(-4)}</span></td>
 <td style="color:${pnlColor};font-weight:700">${pnlStr}</td>
-<td><span style="display:inline-block;width:28px;height:28px;border-radius:2px;background:${gc}12;color:${gc};text-align:center;line-height:28px;font-weight:800;font-size:14px;border:1px solid ${gc}30;font-family:'JetBrains Mono',monospace">${w.grade}</span></td>
-<td style="color:#fff;font-weight:600">${w.score}</td>
+<td>${gradeCell}</td>
+<td>${scoreCell}</td>
 <td style="font-family:'JetBrains Mono',monospace">${bssCell}</td>
 <td style="color:#e8e8e8">${winCell}</td>
 <td style="color:#707070">${w.resolved}</td>
