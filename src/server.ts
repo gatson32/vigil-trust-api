@@ -3669,39 +3669,108 @@ app.get('/v1/api/pricing', (_req, res) => {
 
 // Pricing page (HTML)
 app.get('/api/pricing', (_req, res) => {
-  const tierCards = Object.entries(API_TIERS).map(([id, t]) => {
-    const features = id === 'free'
-      ? ['100 scores/month', '10 req/min', 'Community support']
-      : id === 'starter'
-      ? ['1,000 scores/month', '30 req/min', 'Email support', 'Compare endpoint']
-      : id === 'pro'
-      ? ['10,000 scores/month', '120 req/min', 'Priority support', 'Webhook alerts', 'Bulk scoring']
-      : ['100,000 scores/month', '600 req/min', 'Dedicated support', 'Custom dimensions', 'SLA'];
+  // v1.22.4 — Launch-ready pricing: Free / Pro $299 / Elite $1,499 / Enterprise.
+  // Modeled on Nansen Alpha ($1.5K), Arkham Ultra ($2K), Unusual Whales ($100),
+  // OddsJam ($349). Elite is the "priced at its actual value to quant desks" tier.
+  const tiers = [
+    {
+      id: 'free', name: 'Free', price: 'Free', sub: '',
+      features: [
+        'Score any wallet',
+        'Browse leaderboard + divergence',
+        '60 req/min public API',
+        'Community support (GitHub)',
+      ],
+      cta: 'Start scoring →', href: '/',
+      border: '#1e1e1e', accent: '#555',
+    },
+    {
+      id: 'pro', name: 'Pro', price: '$299', sub: '/month',
+      features: [
+        '10,000 API calls/day',
+        'Full historical grade timeline',
+        'Bulk CSV exports',
+        'Divergence email/webhook alerts',
+        'Priority API queue',
+        'Email support',
+      ],
+      cta: 'Get Pro →', href: 'mailto:api@vigilscore.xyz?subject=VIGIL%20Pro%20tier%20signup',
+      border: '#00d4aa', accent: '#00d4aa',
+      badge: 'MOST POPULAR',
+    },
+    {
+      id: 'elite', name: 'Elite', price: '$1,499', sub: '/month',
+      features: [
+        'Unlimited API calls',
+        'Real-time webhook firehose',
+        'A/B-wallet position alerts < 60s',
+        'Wallet-label pipeline access',
+        'Custom scoring weights',
+        'Dedicated Slack channel',
+        'SLA: 99.9% uptime',
+      ],
+      cta: 'Book Elite demo →', href: 'mailto:api@vigilscore.xyz?subject=VIGIL%20Elite%20tier%20demo',
+      border: '#3b82f6', accent: '#3b82f6',
+      badge: 'FOR QUANT DESKS',
+    },
+    {
+      id: 'enterprise', name: 'Enterprise', price: 'Custom', sub: '',
+      features: [
+        'Everything in Elite',
+        'On-prem / VPC deployment',
+        'Custom scoring dimensions',
+        'Multi-chain beyond Polymarket',
+        'White-label API',
+        'Quarterly research briefings',
+      ],
+      cta: 'Contact sales →', href: 'mailto:api@vigilscore.xyz?subject=VIGIL%20Enterprise',
+      border: '#1e1e1e', accent: '#707070',
+    },
+  ];
 
-    const popular = id === 'pro' ? `<div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;padding:2px 12px;border-radius:2px;font-size:11px;font-weight:700">MOST POPULAR</div>` : '';
-    const border = id === 'pro' ? 'border:2px solid #3b82f6;' : 'border:1px solid #1e1e1e;';
-
-    return `<div style="position:relative;background:#141414;${border}border-radius:2px;padding:24px;flex:1;min-width:220px">
-      ${popular}
-      <h3 style="color:#fff;font-size:16px;font-weight:700;margin-bottom:4px">${id.charAt(0).toUpperCase() + id.slice(1)}</h3>
-      <div style="font-size:28px;font-weight:800;color:#fff;margin:8px 0">${t.price === 0 ? 'Free' : '$' + t.price}<span style="font-size:14px;color:#555;font-weight:400">${t.price > 0 ? '/mo' : ''}</span></div>
-      <ul style="list-style:none;padding:0;margin:16px 0">${features.map(f => `<li style="color:#707070;font-size:13px;padding:4px 0">✓ ${f}</li>`).join('')}</ul>
-      ${id === 'free' ? '<a href="/v1/api/keys/create?tier=free&email=demo" style="display:block;text-align:center;padding:10px;background:#1e1e1e;color:#707070;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Free Key</a>' : `<a href="mailto:api@vigilscore.xyz?subject=VIGIL API ${id} tier" style="display:block;text-align:center;padding:10px;background:#3b82f6;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:13px">Get Started</a>`}
+  const tierCards = tiers.map(t => {
+    const badge = t.badge
+      ? `<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:${t.accent};color:#0c0c0c;padding:3px 12px;border-radius:2px;font-size:10px;font-weight:800;letter-spacing:2px;white-space:nowrap">${t.badge}</div>`
+      : '';
+    const featureList = t.features.map(f => `<li style="color:#b0bfb7;font-size:13px;padding:7px 0;border-bottom:1px solid #141414">✓ ${f}</li>`).join('');
+    return `<div style="position:relative;background:#0f0f0f;border:1px solid ${t.border};border-radius:2px;padding:28px 22px;flex:1;min-width:220px;max-width:260px">
+      ${badge}
+      <h3 style="color:#fff;font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">${t.name}</h3>
+      <div style="font-size:32px;font-weight:800;color:${t.accent};margin:10px 0 4px;font-family:'JetBrains Mono',monospace">${t.price}<span style="font-size:13px;color:#555;font-weight:400">${t.sub}</span></div>
+      <ul style="list-style:none;padding:0;margin:20px 0">${featureList}</ul>
+      <a href="${t.href}" style="display:block;text-align:center;padding:12px;background:transparent;color:${t.accent};border:1px solid ${t.accent}60;border-radius:2px;text-decoration:none;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono',monospace;transition:all .2s" onmouseover="this.style.background='${t.accent}15';this.style.borderColor='${t.accent}'" onmouseout="this.style.background='transparent';this.style.borderColor='${t.accent}60'">${t.cta}</a>
     </div>`;
   }).join('');
 
   res.setHeader('Content-Type', 'text/html');
-  res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VIGIL API Pricing</title></head>
-<body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:40px 20px">
-<div style="max-width:1000px;margin:0 auto">
-  <div style="text-align:center;margin-bottom:40px">
-    <h1 style="font-size:32px;font-weight:800;letter-spacing:2px;margin-bottom:8px">VIGIL API</h1>
-    <p style="color:#555;font-size:14px">Trust scores for prediction market wallets. Programmatic access.</p>
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL Pricing — Pro $299 · Elite $1,499</title>
+<meta name="description" content="Pro tier for analysts at $299/mo. Elite tier for quant desks at $1,499/mo — unlimited API, webhook firehose, sub-60s A/B-wallet position alerts, wallet-label pipeline.">
+<meta property="og:title" content="VIGIL Pricing — Pro & Elite for Polymarket Traders">
+<meta property="og:description" content="$299 Pro · $1,499 Elite. Built for quant desks trading Polymarket geopolitics.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:40px 20px;line-height:1.6">
+<div style="max-width:1180px;margin:0 auto">
+  <div style="text-align:center;margin-bottom:14px">
+    <a href="/" style="font-size:18px;font-weight:800;letter-spacing:4px;color:#fff;text-decoration:none;font-family:'JetBrains Mono',monospace">VIGIL</a>
   </div>
-  <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">${tierCards}</div>
-  <div style="text-align:center;margin-top:40px">
-    <p style="color:#444;font-size:13px">All plans include: REST API access, JSON responses, wallet scoring, compare endpoint</p>
-    <p style="color:#444;font-size:12px;margin-top:8px">Questions? <a href="mailto:api@vigilscore.xyz" style="color:#3b82f6">api@vigilscore.xyz</a></p>
+  <div style="text-align:center;margin-bottom:48px">
+    <div style="display:inline-block;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#00d4aa;border:1px solid #00d4aa40;padding:4px 10px;border-radius:2px;margin-bottom:18px;font-family:'JetBrains Mono',monospace">PRICING · LAUNCH DAY</div>
+    <h1 style="font-size:32px;font-weight:800;margin-bottom:10px;letter-spacing:-0.5px">Built for traders who need to be right about geopolitics.</h1>
+    <p style="color:#8a9b92;font-size:15px;max-width:620px;margin:0 auto">Skill-weighted consensus, sub-60s position alerts on A/B-graded wallets, and a wallet-label pipeline that disambiguates identity across Polymarket. Free for individual use. Paid for desks that trade on it.</p>
+  </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:stretch">${tierCards}</div>
+
+  <div style="max-width:780px;margin:60px auto 0;padding:28px;background:#0f0f0f;border:1px solid #1e1e1e;border-radius:2px">
+    <div style="font-size:10px;font-weight:700;color:#00d4aa;letter-spacing:3px;text-transform:uppercase;margin-bottom:12px">WHY ELITE IS $1,499</div>
+    <p style="color:#b0bfb7;font-size:14px;margin:0 0 10px">Nansen Alpha is $1,499/mo for generalist wallet intel. Arkham Ultra is $2,000+/mo. Unusual Whales is $100/mo but doesn't grade forecasting skill. OddsJam is $349/mo for sportsbook odds, not prediction-market forecasters.</p>
+    <p style="color:#b0bfb7;font-size:14px;margin:0">Elite is the only product in the market priced for what it does for a quant desk: tell you, in under 60 seconds, when a wallet that has outperformed market consensus on 200+ geopolitics resolutions opens a position against the crowd. We priced it at what it's worth to a desk, not at what the category anchors suggest.</p>
+  </div>
+
+  <div style="text-align:center;margin-top:48px">
+    <p style="color:#555;font-size:12px">All plans include methodology access, bootstrap CI95 on every grade, and on-chain reproducibility.</p>
+    <p style="color:#555;font-size:12px;margin-top:10px">Questions? <a href="mailto:api@vigilscore.xyz" style="color:#00d4aa;text-decoration:none">api@vigilscore.xyz</a> · <a href="/polymarket/methodology" style="color:#00d4aa;text-decoration:none;margin-left:16px">Read the methodology →</a></p>
   </div>
 </div></body></html>`);
 });
