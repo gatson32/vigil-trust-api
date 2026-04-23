@@ -2609,7 +2609,7 @@ BSS   = 1 − Brier / Brier_climatology
 Brier_climatology = base_rate · (1 − base_rate)</pre>
   <p><code>BSS &gt; 0</code> means the trader beats a naive "always predict the base rate" forecaster. <code>BSS &lt; 0</code> means they're worse than doing nothing. We also decompose Brier into Reliability, Resolution, and Uncertainty (Murphy, 1973) to distinguish miscalibrated traders from traders who just bet near 50%.</p>
 
-  <h2>Reference forecast</h2>
+  <h2 id="reference-forecast">Reference forecast</h2>
   <p>The reference probability against which we score each bet is <strong>the market mid-price at the trader's entry timestamp</strong>, not the final resolution price. Using resolution would be circular — the trader's own position moves the price. Using entry-time mid-price measures genuine forecasting skill relative to the crowd's available information at the moment of the bet.</p>
 
   <h2>Bootstrap CI95 on the score</h2>
@@ -2622,7 +2622,7 @@ Brier_climatology = base_rate · (1 − base_rate)</pre>
 6. Map score band to grade band via standard grade thresholds</pre>
   <p>Other dimensions are held at point estimate — calibration is the largest variance driver and the one any critic will attack first.</p>
 
-  <h2>The "Insufficient Data" rule</h2>
+  <h2 id="insufficient-data">The "Insufficient Data" rule</h2>
   <p>A wallet's grade is reported as <code>INS</code> (not a letter) when either:</p>
   <table>
     <tr><th>Trigger</th><th>Threshold</th><th>Why</th></tr>
@@ -2754,7 +2754,7 @@ function aboutPage(): string {
   <p><strong>2. We publish errors.</strong> If you find a mistake — in the math, the code, or a specific grade — email <a href="mailto:api@vigilscore.xyz">api@vigilscore.xyz</a> or open a GitHub issue. We will credit you publicly and fix it.</p>
   <p><strong>3. Not investment advice.</strong> A VIGIL grade is a historical calibration statistic, not a trade signal. Skilled traders can be wrong; new information moves markets before it moves grades. Do not copy-trade based on a grade. Use it as one input among many.</p>
 
-  <h2>Data retention and opt-out</h2>
+  <h2 id="data">Data retention and opt-out</h2>
   <p>We persist three things: (a) wallet addresses we have scanned, (b) the grades and CIs we have computed, (c) email addresses of alert subscribers who explicitly opted in. Nothing else.</p>
   <p>If you operate a wallet and want it removed from the leaderboard (but not from opportunistic single-wallet scoring, which is unavoidable because the underlying data is public), email <a href="mailto:api@vigilscore.xyz">api@vigilscore.xyz</a> from an address you can prove controls the wallet (signed message), and we will exclude it from all aggregated surfaces within 72 hours.</p>
 
