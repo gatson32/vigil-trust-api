@@ -2053,6 +2053,10 @@ app.get('/v1/polymarket/search', (req, res) => {
 // yet built as standalone pages. Redirect to the relevant landing anchor / working
 // equivalent so internal links and cached shares never 404.
 app.get('/polymarket/methodology', (_req, res) => res.type('html').send(gradingMethodologyPage()));
+
+// v1.22.6 — Research preview / ToS posture page
+app.get('/about', (_req, res) => res.type('html').send(aboutPage()));
+app.get('/research-preview', (_req, res) => res.redirect(301, '/about'));
 app.get('/polymarket/changelog', (_req, res) => res.redirect(301, '/#builder'));
 app.get('/polymarket/weekly', (_req, res) => res.redirect(301, '/#social'));
 app.get('/v1/polymarket/api-docs', (_req, res) => res.redirect(301, '/v1'));
@@ -2638,6 +2642,81 @@ Brier_climatology = base_rate · (1 − base_rate)</pre>
     <a href="/polymarket/leaderboard" style="color:#707070">Skill Leaderboard</a> ·
     <a href="/polymarket/consensus/methodology" style="color:#707070">Consensus Methodology</a> ·
     <a href="https://github.com/vigil-trust" style="color:#707070">Code</a>
+  </div>
+</div>
+</body></html>`;
+}
+
+function aboutPage(): string {
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL — Research Preview · About</title>
+<meta name="description" content="VIGIL is a research preview. We read public Polymarket data to grade forecaster skill. Non-custodial, non-affiliated, no trades executed. Our posture on Polymarket ToS and why this exists.">
+<meta property="og:title" content="VIGIL — Research Preview">
+<meta property="og:description" content="Non-custodial skill grading for Polymarket traders. Read-only. Not affiliated with Polymarket. Research preview, fully open methodology.">
+<link rel="canonical" href="https://vigilscore.xyz/about">
+<style>
+  body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;margin:0;padding:28px;line-height:1.7}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:28px;font-weight:800;margin:0 0 8px;letter-spacing:-0.5px}
+  h2{font-size:18px;font-weight:700;margin:36px 0 12px;color:#fff;border-bottom:1px solid #1e1e1e;padding-bottom:8px}
+  p{color:#ccc;font-size:15px;margin:0 0 14px}
+  code{font-family:'JetBrains Mono',monospace;color:#eab308;background:#141414;padding:2px 6px;border-radius:2px;font-size:13px}
+  .kicker{font-size:11px;color:#00d4aa;letter-spacing:3px;text-transform:uppercase;margin-bottom:10px;font-weight:700;font-family:'JetBrains Mono',monospace}
+  a{color:#00d4aa;text-decoration:none} a:hover{text-decoration:underline}
+  .header{text-align:center;margin-bottom:28px}
+  .brand{font-size:22px;font-weight:800;letter-spacing:4px;color:#fff;text-decoration:none;font-family:'JetBrains Mono',monospace}
+  .callout{background:#0a1a14;border:1px solid #10b98130;border-left:3px solid #10b981;padding:16px 18px;margin:18px 0;color:#e5e7eb;font-size:14px}
+  .callout strong{color:#10b981}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:20px 0}
+  .tile{background:#0f0f0f;border:1px solid #1e1e1e;border-radius:2px;padding:16px}
+  .tile h3{font-size:13px;color:#fff;font-weight:700;margin:0 0 6px;letter-spacing:1px;text-transform:uppercase}
+  .tile p{font-size:13px;color:#8a9b92;margin:0}
+  .footer{text-align:center;margin-top:48px;color:#555;font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:1px}
+  @media(max-width:640px){.grid{grid-template-columns:1fr}}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="header"><a class="brand" href="/">VIGIL</a></div>
+
+  <div class="kicker">Research Preview · Launched April 22, 2026</div>
+  <h1>What VIGIL is, and isn't.</h1>
+
+  <p>VIGIL is a <strong>research preview</strong>. We read public Polymarket data and public on-chain state, and we publish a skill grade — A through F — for every forecaster we can identify. The grade comes with a bootstrap 95% confidence interval. If the interval is wide or the sample is small, we show <code>INS</code> (Insufficient Data) instead of a letter.</p>
+
+  <div class="callout"><strong>We are not affiliated with Polymarket.</strong> We do not receive funding, data privileges, or API access beyond what is publicly available. Polymarket is a trademark of its owner; we use the name descriptively to identify the venue we score.</div>
+
+  <h2>Non-custodial, read-only, no execution</h2>
+  <div class="grid">
+    <div class="tile"><h3>No custody</h3><p>We never hold user funds. We never sign transactions. We never request private keys.</p></div>
+    <div class="tile"><h3>No execution</h3><p>VIGIL does not place trades, mirror positions, or act on any user's behalf. Grades are informational.</p></div>
+    <div class="tile"><h3>Read-only data</h3><p>We pull from Polymarket's public Gamma API, data-api, CLOB log, and on-chain USDC/redemption events. No private data.</p></div>
+    <div class="tile"><h3>No account creation</h3><p>The free tier has no login. Pro and Elite use simple email-based API keys. No KYC.</p></div>
+  </div>
+
+  <h2>Our posture on Polymarket ToS</h2>
+  <p>We have read Polymarket's Terms of Service carefully. VIGIL reads publicly exposed data through stable, documented endpoints; we observe all published rate limits; we do not attempt to re-identify or deanonymize traders beyond what Polymarket itself publishes via handles and public profiles.</p>
+  <p>We believe independent skill analytics <em>improve</em> prediction market quality — calibrated traders get capital from followers, poorly calibrated whales lose influence, consensus surfaces real information. If Polymarket believes otherwise and reaches out, we will engage in good faith. In the interim, everything we publish is reproducible from public inputs, and every grade links to the exact data used to compute it.</p>
+
+  <h2>Research preview — what it means</h2>
+  <p>"Research preview" is not marketing language. It means three things:</p>
+  <p><strong>1. Grades may change as our method improves.</strong> We log every methodology revision in the public changelog. A wallet's grade today may differ from its grade tomorrow if we fix a bug or widen our sample. We version the formula explicitly (currently v1.22.1).</p>
+  <p><strong>2. We publish errors.</strong> If you find a mistake — in the math, the code, or a specific grade — email <a href="mailto:api@vigilscore.xyz">api@vigilscore.xyz</a> or open a GitHub issue. We will credit you publicly and fix it.</p>
+  <p><strong>3. Not investment advice.</strong> A VIGIL grade is a historical calibration statistic, not a trade signal. Skilled traders can be wrong; new information moves markets before it moves grades. Do not copy-trade based on a grade. Use it as one input among many.</p>
+
+  <h2>Data retention and opt-out</h2>
+  <p>We persist three things: (a) wallet addresses we have scanned, (b) the grades and CIs we have computed, (c) email addresses of alert subscribers who explicitly opted in. Nothing else.</p>
+  <p>If you operate a wallet and want it removed from the leaderboard (but not from opportunistic single-wallet scoring, which is unavoidable because the underlying data is public), email <a href="mailto:api@vigilscore.xyz">api@vigilscore.xyz</a> from an address you can prove controls the wallet (signed message), and we will exclude it from all aggregated surfaces within 72 hours.</p>
+
+  <h2>Why this exists</h2>
+  <p>Prediction markets are an information-aggregation technology. They work better when the information is good. Today, the loudest wallets on Polymarket are not the most accurate; followers copy them; capital flows the wrong way; markets are noisier than they should be. VIGIL is the tool that fixes the attribution gap — the bridge between "this wallet has PnL" and "this wallet has skill." The formula is public. The code is inspectable. The moat is the pipeline, not the secret.</p>
+
+  <div class="footer">
+    <a href="/">← Back to VIGIL</a> ·
+    <a href="/polymarket/methodology" style="color:#555">Methodology</a> ·
+    <a href="/polymarket/leaderboard" style="color:#555">Leaderboard</a> ·
+    <a href="/api/pricing" style="color:#555">Pricing</a>
   </div>
 </div>
 </body></html>`;
