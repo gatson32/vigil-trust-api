@@ -3121,16 +3121,20 @@ app.get('/polymarket/leaderboard', (_req, res) => {
     }).join('');
   }
 
-  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Skill Leaderboard</title>
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VIGIL — Geopolitics Skill Leaderboard</title>
+<meta name="description" content="The top Polymarket forecasters on geopolitics markets — Iran, Hormuz, elections, tail-risk. Ranked by Brier Skill Score, calibration, and bootstrap CI95. Not by PnL.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet"></head>
   <body style="background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:24px">
     <div style="max-width:900px;margin:0 auto">
       <div style="text-align:center;margin-bottom:24px">
         <a href="/" style="font-size:18px;font-weight:800;letter-spacing:4px;color:#fff;text-decoration:none;font-family:'JetBrains Mono','SF Mono',monospace">VIGIL</a>
-        <span style="color:#555;font-size:11px;margin-left:12px;letter-spacing:2px;text-transform:uppercase">Skill Leaderboard</span>
+        <span style="color:#555;font-size:11px;margin-left:12px;letter-spacing:2px;text-transform:uppercase">Geopolitics Skill Leaderboard</span>
+      </div>
+      <div style="max-width:640px;margin:0 auto 12px auto;padding:14px 16px;background:#0a1a14;border:1px solid #10b98130;border-radius:2px;text-align:center;font-size:12px;color:#10b981;font-family:'JetBrains Mono',monospace;letter-spacing:0.5px">
+        LIVE: Iran peace deal · Strait of Hormuz · Global election markets — $47M+ weekly volume
       </div>
       <p style="text-align:center;color:#707070;font-size:14px;margin-bottom:20px">
-        Wallets ranked by actual forecasting skill — calibration, Brier Skill Score, and resolution — not PnL.
+        Wallets ranked by actual forecasting skill — Brier Skill Score, calibration, bootstrap CI95 — not PnL. Geopolitics is 47% of Polymarket volume; the loudest traders are rarely the most right.
         ${status.lastCrawl ? `<br><span style="color:#333;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
       </p>
 
@@ -4280,8 +4284,10 @@ function renderHomepage(): string {
   }).join('') : '';
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VIGIL — Trust Scores for Polymarket Traders</title>
-<meta name="description" content="Score any Polymarket wallet's forecasting skill. Calibration scoring, on-chain verification, skill vs luck decomposition. See if a trader is actually skilled — or just lucky.">
+<title>VIGIL — The Trust Engine for Polymarket Geopolitics Traders</title>
+<meta name="description" content="Geopolitics is 47% of Polymarket volume. VIGIL grades every forecaster: Brier Skill Score, calibration, bootstrap CI95. Skill-weighted consensus across A/B-graded wallets. See who's actually right, not just loud.">
+<meta property="og:title" content="VIGIL — Trust Engine for Polymarket Geopolitics">
+<meta property="og:description" content="47% of Polymarket volume is geopolitics. VIGIL grades every wallet with Brier Skill Score + bootstrap CI95. Follow signal, not noise.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -4424,8 +4430,9 @@ function doSubscribe(e) {
 </div>
 
 <div class="hero">
-  <h1>Trust Scores for <em>Polymarket</em> Traders</h1>
-  <p>Before you copy-trade a whale, check if they're actually skilled — or just lucky. Not a single one of Polymarket's top 10 most profitable wallets scored above D.</p>
+  <div style="display:inline-block;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#00d4aa;border:1px solid #00d4aa40;padding:4px 10px;border-radius:2px;margin-bottom:18px;font-family:'JetBrains Mono',monospace">GEOPOLITICS · 47% OF POLYMARKET VOLUME</div>
+  <h1>The trust engine for <em>Polymarket geopolitics</em> traders</h1>
+  <p>Iran peace deal. Strait of Hormuz. BTC $150k. The markets moving billions are geopolitics, and the loudest traders are rarely the most right. VIGIL grades every forecaster with Brier Skill Score + bootstrap 95% CIs. Skill-weighted consensus across A/B wallets — so you follow signal, not noise.</p>
 </div>
 
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:48px;border:1px solid #1a1a1a;border-radius:2px;overflow:hidden;background:#0a0a0a">
@@ -4443,9 +4450,9 @@ function doSubscribe(e) {
 </div>
 
 <div style="max-width:560px;margin:0 auto 48px;text-align:center;background:#0f0f0f;border:1px solid #1e1e1e;border-radius:2px;padding:24px 28px">
-  <div style="font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:8px">ALERT SYSTEM</div>
-  <div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:6px">600+ wallets scanned. 0 A-grades found.</div>
-  <p style="font-size:13px;color:#555;margin-bottom:14px">Get notified when VIGIL discovers the first A-grade forecaster.</p>
+  <div style="font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:8px">GEOPOLITICS ALERT FEED</div>
+  <div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:6px">600+ wallets scanned. ${aGradeCount} A-grades found.</div>
+  <p style="font-size:13px;color:#555;margin-bottom:14px">Get notified when skilled money diverges from the crowd on Iran, Hormuz, elections, and tail-risk markets.</p>
   <form onsubmit="doSubscribe(event)" style="display:flex;gap:8px">
     <input type="email" id="subemail" placeholder="you@example.com" style="flex:1;padding:12px 16px;border-radius:2px;border:1px solid #2a2a2a;background:#0c0c0c;color:#fff;font-size:13px;outline:none;font-family:'JetBrains Mono','SF Mono',monospace" />
     <button type="submit" id="subbtn" style="padding:12px 20px;border-radius:2px;border:1px solid #00d4aa;background:transparent;color:#00d4aa;font-weight:700;font-size:11px;cursor:pointer;white-space:nowrap;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono','SF Mono',monospace">ALERT ME</button>
