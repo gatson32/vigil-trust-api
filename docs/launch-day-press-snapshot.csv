@@ -1,0 +1,11 @@
+rank,handle,wallet,pnl_usd,resolved_bets,win_rate_pct,trust_grade,trust_score,brier_skill_score,calibration_error_pct,notes
+1,Theo4,0x56687bf447db6ffa42ffe2204a05edaa20f55839,22053934,14,92.9,D,37,-4.6001,52.2,"Only 14 resolved bets — would be INS under v1.22.0 threshold"
+2,Fredi9999,0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf,16619507,40,60.0,D,41,-0.2107,27.4,"40 bets passes INS threshold; negative BSS means worse than market mid"
+3,kch123,0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee,11866256,338,0.6,D,38,-31.3439,39.2,"338 resolved bets, 0.6% win rate. Bonder / long-tail-lottery pattern suspected"
+4,Len9311238,0x78b9ac44a6d7d7a076c14e0ad518b301b63c6b76,8709973,7,100.0,D,38,-0.0952,51.2,"7 resolved bets — INS"
+5,zxgngl,0xd235973291b2b75ff4070e9c0b01728c520b0f29,7807266,6,83.3,F,31,-0.4773,34.3,"6 resolved bets — INS"
+6,RepTrump,0x863134d00841b2e200492805a01e1e2f5defaa53,7532410,8,87.5,F,31,-1.4238,40.9,"8 resolved bets — INS"
+7,RN1,0x2005d16a84ceefa912d4e380cd32e7ff827875ea,7465792,964,6.2,D,45,-3.6104,36.7,"964 resolved bets, 6.2% win rate. Bonder / long-tail pattern suspected"
+8,swisstony,0x204f72f35326db932158cba6adff0b9a1da95e14,6100031,508,55.9,C,57,-0.5292,31.3,"Only top-PnL wallet passing C threshold. 508 resolved bets"
+9,PrincessCaro,0x8119010a6e589062aa03583bb3f39ca632d9f887,6083643,14,71.4,D,35,-0.2597,24.5,"14 resolved bets — INS"
+10,walletmobile,0xe9ad918c7678cd38b12603a762e638a5d1ee7091,5942685,0,0.0,F,18,-1.0000,100.0,"Zero resolved bets. Position-transfer recipient, flagged"
