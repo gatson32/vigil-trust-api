@@ -71,6 +71,11 @@ import {
   labelStats,
   type LabelCategory,
 } from './lib/labels.js';
+import {
+  antiSybilVerdict,
+  ageFactor,
+  MIN_AGE_FOR_GRADE,
+} from './lib/anti-sybil.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -1947,7 +1952,27 @@ app.get('/v1/polymarket/:wallet', async (req, res, next) => {
       return res.status(404).json({ error: 'TRADER_NOT_FOUND', message: `No Polymarket activity found for ${wallet}.` });
     }
 
-    // Update prescore cache
+    // v1.22.8 — Anti-Sybil difficulty adjustment BEFORE caching.
+    // Mutates report in-place: if the wallet is too young or too dormant to
+    // letter-grade, we force ci95.insufficientData=true and append a flag.
+    try {
+      const sybil = await quickSybilCheck(wallet);
+      const ageDays = sybil?.ageDays ?? null;
+      const txCount = sybil?.txCount ?? null;
+      const resolvedBets = report.confidence?.resolvedBets ?? 0;
+      const verdict = antiSybilVerdict({ ageDays, txCount, resolvedBets });
+      (report as any).antiSybil = verdict;
+      if (!verdict.eligibleForGrade && report.confidence?.ci95) {
+        report.confidence.ci95.insufficientData = true;
+        report.confidence.ci95.gradeLow = 'INS' as any;
+        report.confidence.ci95.gradeHigh = 'INS' as any;
+        report.flags = Array.from(new Set([...(report.flags ?? []), `young_wallet: ${verdict.reason}`]));
+      }
+    } catch (e) {
+      console.warn('[ANTI-SYBIL] verdict failed:', (e as Error).message);
+    }
+
+    // Update prescore cache (AFTER anti-Sybil mutation so cached reports are correct)
     prescoredCache.set(walletLower, {
       ...report,
       cachedAt: Date.now(),
@@ -4507,6 +4532,25 @@ async function runPrescoringCron(): Promise<void> {
     try {
       const report = await scorePolymarketTrader(wallet.wallet);
       if (report) {
+        // v1.22.8 — Anti-Sybil difficulty adjustment runs BEFORE caching so
+        // cache entries are correct and labels see the gated report.
+        try {
+          const sybil = await quickSybilCheck(wallet.wallet);
+          const ageDays = sybil?.ageDays ?? null;
+          const txCount = sybil?.txCount ?? null;
+          const resolvedBets = report.confidence?.resolvedBets ?? 0;
+          const verdict = antiSybilVerdict({ ageDays, txCount, resolvedBets });
+          (report as any).antiSybil = verdict;
+          if (!verdict.eligibleForGrade && report.confidence?.ci95) {
+            report.confidence.ci95.insufficientData = true;
+            report.confidence.ci95.gradeLow = 'INS' as any;
+            report.confidence.ci95.gradeHigh = 'INS' as any;
+            report.flags = Array.from(new Set([...(report.flags ?? []), `young_wallet: ${verdict.reason}`]));
+          }
+        } catch (e) {
+          console.warn(`[ANTI-SYBIL] cron check failed for ${wallet.name}:`, (e as Error).message);
+        }
+
         // Store in prescore cache with timestamp
         prescoredCache.set(wallet.wallet.toLowerCase(), {
           ...report,
