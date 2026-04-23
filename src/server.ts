@@ -3,7 +3,7 @@
 
 import express from 'express';
 import cors from 'cors';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes, timingSafeEqual, createHmac } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -3855,6 +3855,213 @@ app.get('/v1/api/keys/usage', (req, res) => {
     ratePerMin: record.ratePerMin,
     createdAt: record.createdAt,
   });
+});
+
+// ============================================================
+//  WEBHOOK FIREHOSE (v1.22.5) — Elite tier delivery infrastructure
+// ============================================================
+// Register outbound webhooks, fire events with HMAC signatures, retry
+// with exponential backoff. Launch-day skeleton: accept registrations,
+// plumbing for A/B-wallet position alerts, grade-upgrade events, and
+// consensus divergence alerts. Real event sources wire in post-launch.
+
+interface WebhookRecord {
+  id: string;                    // vh_xxxxxxxx
+  owner: string;                 // email (must match an API key owner)
+  url: string;                   // destination
+  events: string[];              // subscribed event types
+  secret: string;                // HMAC signing secret
+  tier: 'pro' | 'elite' | 'enterprise';
+  createdAt: string;
+  lastDeliveryAt: string | null;
+  lastStatus: number | null;     // HTTP status of last delivery
+  failureCount: number;          // consecutive failures
+  disabled: boolean;
+}
+
+// Event taxonomy — consumed by the delivery worker
+const WEBHOOK_EVENTS = [
+  'grade.computed',              // any — emits when a wallet is freshly scored
+  'grade.upgraded',              // pro+ — emits when a wallet crosses a grade threshold (e.g. C → B)
+  'wallet.position.opened',      // elite — emits when an A/B wallet opens a position > $X
+  'wallet.position.closed',      // elite — emits when an A/B wallet closes a position
+  'consensus.divergence',        // pro+ — emits when skill-consensus diverges > 10pts from market mid
+  'market.resolved',             // any — emits on market resolution with consensus vs. actual
+] as const;
+
+const webhookStore = new Map<string, WebhookRecord>();
+
+function generateWebhookId(): string {
+  return 'vh_' + randomBytes(12).toString('base64url').slice(0, 16);
+}
+
+function generateWebhookSecret(): string {
+  return 'whsec_' + randomBytes(32).toString('base64url').slice(0, 40);
+}
+
+function signWebhookPayload(secret: string, body: string, timestamp: number): string {
+  const payload = `${timestamp}.${body}`;
+  return 'sha256=' + createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+// Fire an event to all subscribed webhooks. Called by event sources
+// (prescore cron, consensus cache warmer, divergence detector). Non-blocking:
+// we dispatch and forget; the delivery worker handles retries.
+async function fireWebhookEvent(eventType: string, data: Record<string, unknown>) {
+  const timestamp = Date.now();
+  const eventId = 'evt_' + randomBytes(12).toString('base64url').slice(0, 16);
+  const subscribers: WebhookRecord[] = [];
+  for (const wh of webhookStore.values()) {
+    if (wh.disabled) continue;
+    if (!wh.events.includes(eventType) && !wh.events.includes('*')) continue;
+    subscribers.push(wh);
+  }
+  if (subscribers.length === 0) return;
+
+  const body = JSON.stringify({
+    id: eventId,
+    type: eventType,
+    created: Math.floor(timestamp / 1000),
+    data,
+  });
+
+  // Fire all in parallel, each with its own retry chain
+  await Promise.allSettled(subscribers.map(wh => deliverWebhook(wh, body, timestamp, eventType)));
+}
+
+async function deliverWebhook(wh: WebhookRecord, body: string, timestamp: number, eventType: string, attempt = 0): Promise<void> {
+  const MAX_ATTEMPTS = 3;
+  try {
+    const signature = signWebhookPayload(wh.secret, body, timestamp);
+    const resp = await fetch(wh.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'VIGIL-Signature': signature,
+        'VIGIL-Timestamp': String(timestamp),
+        'VIGIL-Event': eventType,
+        'VIGIL-Webhook-Id': wh.id,
+        'User-Agent': 'VIGIL-Webhook/1.0',
+      },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    wh.lastDeliveryAt = new Date().toISOString();
+    wh.lastStatus = resp.status;
+    if (resp.ok) {
+      wh.failureCount = 0;
+    } else if (attempt < MAX_ATTEMPTS - 1) {
+      // exponential backoff: 2s, 8s, 32s
+      const delay = Math.pow(4, attempt + 1) * 1000;
+      setTimeout(() => deliverWebhook(wh, body, timestamp, eventType, attempt + 1), delay);
+    } else {
+      wh.failureCount++;
+      if (wh.failureCount >= 10) wh.disabled = true;
+    }
+  } catch (err) {
+    wh.lastStatus = 0;
+    if (attempt < MAX_ATTEMPTS - 1) {
+      const delay = Math.pow(4, attempt + 1) * 1000;
+      setTimeout(() => deliverWebhook(wh, body, timestamp, eventType, attempt + 1), delay);
+    } else {
+      wh.failureCount++;
+      if (wh.failureCount >= 10) wh.disabled = true;
+    }
+  }
+}
+
+function requireApiKey(req: any, res: any): ApiKeyRecord | null {
+  const apiKey = (req.headers['x-api-key'] as string) || (req.query.api_key as string);
+  if (!apiKey) {
+    res.status(401).json({ error: 'API_KEY_REQUIRED', message: 'Provide API key via x-api-key header or api_key query param.' });
+    return null;
+  }
+  const record = validateApiKey(apiKey);
+  if (!record) {
+    res.status(401).json({ error: 'INVALID_API_KEY', message: 'Invalid or expired API key.' });
+    return null;
+  }
+  return record;
+}
+
+// POST /v1/webhooks — register a webhook (Pro+ only)
+app.post('/v1/webhooks', (req, res) => {
+  const record = requireApiKey(req, res);
+  if (!record) return;
+  if (record.tier !== 'pro' && record.tier !== 'enterprise') {
+    return res.status(403).json({ error: 'TIER_REQUIRED', message: 'Webhooks require Pro ($299/mo) or Enterprise. Upgrade at /api/pricing.' });
+  }
+  const { url, events } = req.body || {};
+  if (!url || typeof url !== 'string' || !url.startsWith('https://')) {
+    return res.status(400).json({ error: 'INVALID_URL', message: 'Provide a valid https:// URL.' });
+  }
+  if (!Array.isArray(events) || events.length === 0) {
+    return res.status(400).json({ error: 'INVALID_EVENTS', message: 'Provide an array of event types.', available: WEBHOOK_EVENTS });
+  }
+  const invalid = events.filter(e => e !== '*' && !WEBHOOK_EVENTS.includes(e as typeof WEBHOOK_EVENTS[number]));
+  if (invalid.length > 0) {
+    return res.status(400).json({ error: 'UNKNOWN_EVENTS', unknown: invalid, available: WEBHOOK_EVENTS });
+  }
+  // Enforce event-level tier gating
+  const eliteOnly = ['wallet.position.opened', 'wallet.position.closed'];
+  const requiresElite = events.some(e => eliteOnly.includes(e));
+  if (requiresElite && record.tier !== 'enterprise') {
+    return res.status(403).json({ error: 'ELITE_EVENT', message: `Events [${eliteOnly.join(', ')}] require Elite ($1,499/mo) or Enterprise.` });
+  }
+
+  const id = generateWebhookId();
+  const secret = generateWebhookSecret();
+  const wh: WebhookRecord = {
+    id, owner: record.owner, url, events,
+    secret,
+    tier: record.tier === 'enterprise' ? 'enterprise' : 'pro',
+    createdAt: new Date().toISOString(),
+    lastDeliveryAt: null, lastStatus: null,
+    failureCount: 0, disabled: false,
+  };
+  webhookStore.set(id, wh);
+
+  // Fire a test event immediately so the developer can verify signature flow
+  const body = JSON.stringify({
+    id: 'evt_test_' + id,
+    type: 'webhook.ping',
+    created: Math.floor(Date.now() / 1000),
+    data: { message: 'VIGIL webhook registered successfully.', webhookId: id },
+  });
+  setTimeout(() => deliverWebhook(wh, body, Date.now(), 'webhook.ping'), 500);
+
+  res.status(201).json({
+    id, url, events, secret,
+    signatureHeader: 'VIGIL-Signature',
+    signatureAlgorithm: 'HMAC-SHA256 over `${timestamp}.${body}`',
+    note: 'Save the secret — it is returned only on creation. Compute HMAC-SHA256(secret, `${VIGIL-Timestamp}.${rawBody}`) and compare to VIGIL-Signature header.',
+  });
+});
+
+// GET /v1/webhooks — list webhooks for this API key's owner
+app.get('/v1/webhooks', (req, res) => {
+  const record = requireApiKey(req, res);
+  if (!record) return;
+  const hooks = Array.from(webhookStore.values())
+    .filter(w => w.owner === record.owner)
+    .map(w => ({
+      id: w.id, url: w.url, events: w.events, createdAt: w.createdAt,
+      lastDeliveryAt: w.lastDeliveryAt, lastStatus: w.lastStatus,
+      failureCount: w.failureCount, disabled: w.disabled,
+    }));
+  res.json({ webhooks: hooks, available_events: WEBHOOK_EVENTS });
+});
+
+// DELETE /v1/webhooks/:id
+app.delete('/v1/webhooks/:id', (req, res) => {
+  const record = requireApiKey(req, res);
+  if (!record) return;
+  const wh = webhookStore.get(req.params.id);
+  if (!wh || wh.owner !== record.owner) {
+    return res.status(404).json({ error: 'NOT_FOUND', message: 'Webhook not found or not owned by this key.' });
+  }
+  webhookStore.delete(req.params.id);
+  res.json({ deleted: req.params.id });
 });
 
 // ── Telegram Bot Webhook ──────────────────────────────────────────────
