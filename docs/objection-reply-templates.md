@@ -92,12 +92,14 @@ will be INS than graded. That's a feature.
 
 ## 8. "How do you prevent Sybils from gaming your leaderboard?"
 
-Three layers:
-1. Grade weight scales with `log(wallet_age_days)` — new wallets can't vote.
-2. Stake-size weighted (`√stake`), not count-weighted.
-3. Bonder-detection flag — we tag wallets that received positions via transfer.
+Three layers, all shipped in v1.22.8:
 
-Full anti-Sybil spec in v1.23.0 post-launch. Known gap, not a hidden one.
+1. Wallets <30 days old are force-INS regardless of bet count.
+2. Consensus weight scales `log(wallet_age_days)` between 30d→0x and 730d→1x.
+3. Stake-size weighted (`√stake`), not count-weighted — a fresh Sybil needs
+   real USDC at real risk, not more wallets.
+
+Full spec: vigilscore.xyz/polymarket/methodology#anti-sybil
 
 ---
 

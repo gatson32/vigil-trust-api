@@ -2649,6 +2649,20 @@ Brier_climatology = base_rate · (1 − base_rate)</pre>
     <li><code>Penny + Receive-only + BSS &lt; 0</code>: hard-capped at D (49). Only applies when all three conditions hold.</li>
   </ul>
 
+  <h2 id="anti-sybil">Anti-Sybil difficulty adjustment</h2>
+  <p>Before any letter grade is shown, every wallet passes through an anti-Sybil gate that weights grade-eligibility by how expensive the wallet was to create. The objection we hear most is "what stops someone from spinning up 100 wallets and farming an A?" — the math below is the answer.</p>
+  <table>
+    <tr><th>Condition</th><th>Outcome</th></tr>
+    <tr><td>Wallet age &lt; <code>30</code> days (Basescan-verified)</td><td>Force-INS regardless of bet count.</td></tr>
+    <tr><td>Wallet age &gt; <code>1000</code> days with &lt; <code>5</code> total txs</td><td>Force-INS (dormant-proxy pattern).</td></tr>
+    <tr><td>Basescan unavailable + <code>resolvedBets ≥ 100</code></td><td>Eligible for grade, consensus-weight factor <code>0.70</code> (penalized for age-unknown).</td></tr>
+    <tr><td>Basescan unavailable + <code>resolvedBets &lt; 100</code></td><td>Force-INS (insufficient PoW to distinguish from a fresh Sybil).</td></tr>
+    <tr><td>Otherwise</td><td>Eligible; consensus-weight factor scales log between 30 and 730 days, saturating at <code>1.0</code>.</td></tr>
+  </table>
+  <pre>ageFactor(ageDays) = (log(ageDays) − log(30)) / (log(730) − log(30))
+                    clamped to [0, 1]</pre>
+  <p>The factor multiplies into the consensus weight on top of <code>√stake × exp(−days/30) × gradeWeight</code>, so a new Sybil would need real USDC at real risk over real time to move the skill-weighted consensus — not just more wallets. Every report returns an <code>antiSybil</code> block with <code>{eligibleForGrade, ageFactor, reason, ageDaysUsed}</code> so the gate decision is inspectable for every wallet we publish.</p>
+
   <h2>What grades are NOT</h2>
   <p>A VIGIL grade is <strong>not</strong>:</p>
   <ul style="color:#ccc;font-size:15px;line-height:1.7">
