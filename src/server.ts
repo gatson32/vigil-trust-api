@@ -2052,7 +2052,7 @@ app.get('/v1/polymarket/search', (req, res) => {
 // Legacy URL redirects — these paths are linked from the landing page but not
 // yet built as standalone pages. Redirect to the relevant landing anchor / working
 // equivalent so internal links and cached shares never 404.
-app.get('/polymarket/methodology', (_req, res) => res.redirect(301, '/#how'));
+app.get('/polymarket/methodology', (_req, res) => res.type('html').send(gradingMethodologyPage()));
 app.get('/polymarket/changelog', (_req, res) => res.redirect(301, '/#builder'));
 app.get('/polymarket/weekly', (_req, res) => res.redirect(301, '/#social'));
 app.get('/v1/polymarket/api-docs', (_req, res) => res.redirect(301, '/v1'));
@@ -2504,6 +2504,141 @@ No-side holder:    impliedP_Yes = 1 − avgPrice</pre>
   <p>Accepts a Polymarket <code>conditionId</code> (0x…) or a slug (<code>will-trump-win-2024</code>). Returns the full breakdown including top contributors. 5-minute TTL cache.</p>
 
   <div class="footer"><a href="/" style="color:#707070">← Back to VIGIL</a> · <a href="/polymarket/leaderboard" style="color:#707070">Skill Leaderboard</a> · <a href="/polymarket/methodology" style="color:#707070">Grade Methodology</a></div>
+</div>
+</body></html>`;
+}
+
+/**
+ * v1.22.0 — Grading Methodology page (/polymarket/methodology)
+ * This is the shield for the CRO's #1 failure mode: "first quant bootstraps
+ * our data and shows B vs C- overlap at 95% CI." This page publishes the
+ * exact formula, reference forecast, bootstrap CI procedure, and INS rule.
+ */
+function gradingMethodologyPage(): string {
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIGIL Grading — Methodology</title>
+<meta name="description" content="How VIGIL grades Polymarket traders: Brier Skill Score, calibration error, bootstrap CI95, and the 'Insufficient Data' rule. Full math.">
+<meta property="og:title" content="VIGIL Grading — Methodology">
+<meta property="og:description" content="Brier Skill Score + calibration + bootstrap CI95. Reference forecast = market mid-price at entry. Every grade published with its 95% confidence interval.">
+<link rel="canonical" href="https://vigilscore.xyz/polymarket/methodology">
+<style>
+  body{background:#0c0c0c;color:#fff;font-family:'Inter',-apple-system,sans-serif;margin:0;padding:24px;line-height:1.7}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:28px;font-weight:800;margin:0 0 8px;letter-spacing:-0.5px}
+  h2{font-size:18px;font-weight:700;margin:32px 0 12px;color:#fff;border-bottom:1px solid #1e1e1e;padding-bottom:8px}
+  p{color:#ccc;font-size:15px}
+  code,pre{font-family:'JetBrains Mono','SF Mono',monospace;color:#eab308;background:#141414;padding:2px 6px;border-radius:2px;font-size:13px}
+  pre{display:block;padding:14px;color:#e5e7eb;line-height:1.5;overflow-x:auto}
+  .kicker{font-size:11px;color:#707070;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  a{color:#3b82f6;text-decoration:none}a:hover{text-decoration:underline}
+  .header{text-align:center;margin-bottom:24px}
+  .brand{font-size:22px;font-weight:800;letter-spacing:3px;color:#fff;text-decoration:none}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{padding:8px 12px;border-bottom:1px solid #1e1e1e;text-align:left}
+  th{color:#707070;font-size:11px;text-transform:uppercase;letter-spacing:1.5px}
+  .callout{background:#141414;border:1px solid #1e1e1e;border-radius:2px;padding:14px;margin:14px 0;color:#e5e7eb;font-size:14px}
+  .callout strong{color:#fff}
+  .footer{text-align:center;margin-top:40px;color:#555;font-size:11px}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="header"><a class="brand" href="/">VIGIL</a><div style="color:#707070;font-size:13px;margin-top:4px">Grading · Methodology</div></div>
+
+  <div class="kicker">// what this grade means</div>
+  <h1>How VIGIL grades a Polymarket trader.</h1>
+  <p>Every wallet VIGIL scores gets a single letter (<code>A</code>–<code>F</code>) plus a 0–100 score, computed from six dimensions, penalized for red flags, and — critically — published alongside a bootstrap 95% confidence interval. If the CI spans more than one grade-width, or the sample is too thin to support a reliable estimate, the grade is reported as <code>INS</code> (Insufficient Data) rather than a letter.</p>
+
+  <div class="callout"><strong>The honest version.</strong> A letter grade asserts certainty. A letter grade without a confidence interval is a marketing choice pretending to be statistics. We publish every grade with its CI95 so you can see when two traders are statistically distinguishable and when they aren't.</div>
+
+  <h2>The six dimensions</h2>
+  <table>
+    <tr><th>Dimension</th><th>Weight</th><th>What it measures</th></tr>
+    <tr><td><code>Calibration</code></td><td>25%</td><td>How closely stated probabilities match observed outcomes (Brier Skill Score + calibration error).</td></tr>
+    <tr><td><code>Live Edge</code></td><td>20%</td><td>Unrealized PnL trajectory on open positions.</td></tr>
+    <tr><td><code>Profitability</code></td><td>20%</td><td>Risk-adjusted realized PnL.</td></tr>
+    <tr><td><code>Consistency</code></td><td>15%</td><td>Return stability — low coefficient of variation on per-bet returns.</td></tr>
+    <tr><td><code>Discipline</code></td><td>10%</td><td>Position sizing, diversification, no concentration risk.</td></tr>
+    <tr><td><code>Sample Size</code></td><td>10%</td><td>Resolved-bet count (logarithmic).</td></tr>
+  </table>
+
+  <h2>Calibration: Brier Skill Score</h2>
+  <p>For each resolved bet, we compare the trader's revealed probability to the outcome:</p>
+  <pre>Brier = (1/N) · Σ (impliedProb_i − outcome_i)²
+BSS   = 1 − Brier / Brier_climatology
+Brier_climatology = base_rate · (1 − base_rate)</pre>
+  <p><code>BSS &gt; 0</code> means the trader beats a naive "always predict the base rate" forecaster. <code>BSS &lt; 0</code> means they're worse than doing nothing. We also decompose Brier into Reliability, Resolution, and Uncertainty (Murphy, 1973) to distinguish miscalibrated traders from traders who just bet near 50%.</p>
+
+  <h2>Reference forecast</h2>
+  <p>The reference probability against which we score each bet is <strong>the market mid-price at the trader's entry timestamp</strong>, not the final resolution price. Using resolution would be circular — the trader's own position moves the price. Using entry-time mid-price measures genuine forecasting skill relative to the crowd's available information at the moment of the bet.</p>
+
+  <h2>Bootstrap CI95 on the score</h2>
+  <p>We compute a 95% confidence interval on the composite trust score via non-parametric bootstrap:</p>
+  <pre>1. For each wallet, extract per-bet squared errors e_i = (impliedProb_i − outcome_i)²
+2. Resample {e_i} with replacement, N = n_bets, 1000 iterations
+3. Recompute mean Brier on each resample
+4. Project ΔBrier → ΔCalibrationDim → ΔScore using calibration-dim weight
+5. Return 2.5 / 97.5 percentiles as scoreLow / scoreHigh
+6. Map score band to grade band via standard grade thresholds</pre>
+  <p>Other dimensions are held at point estimate — calibration is the largest variance driver and the one any critic will attack first.</p>
+
+  <h2>The "Insufficient Data" rule</h2>
+  <p>A wallet's grade is reported as <code>INS</code> (not a letter) when either:</p>
+  <table>
+    <tr><th>Trigger</th><th>Threshold</th><th>Why</th></tr>
+    <tr><td>Sample too small</td><td><code>resolvedBets &lt; 30</code></td><td>Below n=30, bootstrap CI on Brier is wider than the grade-width; a letter misrepresents precision.</td></tr>
+    <tr><td>CI spans grade</td><td><code>scoreHigh − scoreLow ≥ 20</code></td><td>One grade bucket is 15 points. A 20+ span means we can't distinguish D from B at 95%.</td></tr>
+  </table>
+  <p>This is a deliberate choice to bias toward honesty. Early VIGIL will show many <code>INS</code> wallets. That is correct.</p>
+
+  <h2>Grade thresholds (point estimate)</h2>
+  <table>
+    <tr><th>Grade</th><th>Score</th><th>Tier</th></tr>
+    <tr><td><code>A</code></td><td>80–100</td><td>SHARP — demonstrated calibration, positive BSS, profitable.</td></tr>
+    <tr><td><code>B</code></td><td>65–79</td><td>SOLID — net positive skill.</td></tr>
+    <tr><td><code>C</code></td><td>50–64</td><td>DEVELOPING — mixed signals.</td></tr>
+    <tr><td><code>D</code></td><td>35–49</td><td>RISKY — below naïve baseline or heavy red flags.</td></tr>
+    <tr><td><code>F</code></td><td>0–34</td><td>DANGER — net negative signal.</td></tr>
+  </table>
+
+  <h2>Penalties</h2>
+  <p>Certain patterns deduct from the raw dimension score:</p>
+  <ul style="color:#ccc;font-size:15px;line-height:1.7">
+    <li><code>Penny-lottery</code>: wallets with ≥50% of bets at sub-$0.10 stakes get a 15pt penalty (or 25pt if ≥80% penny). Reduced to zero if BSS &gt; 0 — if the strategy works, it's not farming.</li>
+    <li><code>Receive-only</code>: zero-outbound wallets are lightly flagged (5pt). Many Polymarket proxy/settlement addresses are legitimate.</li>
+    <li><code>Penny + Receive-only + BSS &lt; 0</code>: hard-capped at D (49). Only applies when all three conditions hold.</li>
+  </ul>
+
+  <h2>What grades are NOT</h2>
+  <p>A VIGIL grade is <strong>not</strong>:</p>
+  <ul style="color:#ccc;font-size:15px;line-height:1.7">
+    <li>A prediction of future performance. Past calibration is historical, not predictive.</li>
+    <li>Investment advice. Do not copy-trade an A-grade wallet without understanding why they took the position.</li>
+    <li>A legal or compliance determination. Wallets are pseudonymous; we score behavior, not identity.</li>
+    <li>Static. Grades update every scoring cycle as new resolved markets flow in.</li>
+  </ul>
+
+  <h2>Opt-out</h2>
+  <p>If you are a Polymarket trader and do not want your wallet graded publicly, email <code>api@vigilscore.xyz</code> with a signed message from the wallet. We'll exclude it from public display (aggregate anonymized stats may still include it).</p>
+
+  <h2>Reproducibility</h2>
+  <p>Scoring code is deterministic given the same input data. The commit hash of the running version is published at <code>/v1/health</code>. Every score response includes a <code>scoredAt</code> timestamp so you can re-run the same wallet later and see what changed.</p>
+
+  <h2>Get the JSON</h2>
+  <pre>GET /v1/polymarket/:wallet</pre>
+  <p>Response includes <code>trustScore</code>, <code>trustGrade</code>, full <code>calibrationReport</code>, and the bootstrap <code>confidence.ci95</code> block with <code>{scoreLow, scoreHigh, gradeLow, gradeHigh, insufficientData}</code>.</p>
+
+  <h2>Known limitations</h2>
+  <p>Polymarket's data-api has a ~3100 trade pagination ceiling per wallet. For very high-volume wallets we sample rather than exhaust. Resolution timestamps are inferred from market close dates — for future versions we'll cross-reference the CLOB log for exact entry time.</p>
+  <p>We do not currently detect wash-trading within a wallet's own history. Sybil clustering across wallets is in v1.23.</p>
+
+  <div class="footer">
+    <a href="/" style="color:#707070">← Back to VIGIL</a> ·
+    <a href="/polymarket/leaderboard" style="color:#707070">Skill Leaderboard</a> ·
+    <a href="/polymarket/consensus/methodology" style="color:#707070">Consensus Methodology</a> ·
+    <a href="https://github.com/vigil-trust" style="color:#707070">Code</a>
+  </div>
 </div>
 </body></html>`;
 }
