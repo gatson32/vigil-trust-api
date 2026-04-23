@@ -3138,6 +3138,29 @@ app.get('/polymarket/leaderboard', (_req, res) => {
         ${status.lastCrawl ? `<br><span style="color:#333;font-size:11px">Last updated: ${new Date(status.lastCrawl).toUTCString()} · ${status.discoveredWallets.toLocaleString()} wallets scanned</span>` : ''}
       </p>
 
+      <!-- Launch-day featured geopolitics markets (v1.22.3) -->
+      <div style="margin-bottom:28px">
+        <div style="font-size:10px;font-weight:700;color:#707070;letter-spacing:3px;text-transform:uppercase;margin-bottom:10px;text-align:center">Featured Launch-Day Markets — Skill-Weighted Consensus</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          <a href="/polymarket/markets/iran-peace-deal-2026/consensus" style="text-decoration:none;padding:16px 14px;background:#0f0f0f;border:1px solid #1e1e1e;border-left:3px solid #ef4444;border-radius:2px;display:block;transition:border-color .2s,background .2s" onmouseover="this.style.borderColor='#ef4444';this.style.background='#141414'" onmouseout="this.style.borderColor='#1e1e1e';this.style.borderLeftColor='#ef4444';this.style.background='#0f0f0f'">
+            <div style="font-size:10px;color:#ef4444;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;font-weight:700">IRAN</div>
+            <div style="font-size:13px;color:#fff;font-weight:600;line-height:1.4;margin-bottom:6px">Iran peace deal resolves 2026</div>
+            <div style="font-size:11px;color:#555">See A/B-wallet consensus →</div>
+          </a>
+          <a href="/polymarket/markets/will-strait-of-hormuz-close-in-2026/consensus" style="text-decoration:none;padding:16px 14px;background:#0f0f0f;border:1px solid #1e1e1e;border-left:3px solid #f59e0b;border-radius:2px;display:block;transition:border-color .2s,background .2s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#141414'" onmouseout="this.style.borderColor='#1e1e1e';this.style.borderLeftColor='#f59e0b';this.style.background='#0f0f0f'">
+            <div style="font-size:10px;color:#f59e0b;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;font-weight:700">HORMUZ</div>
+            <div style="font-size:13px;color:#fff;font-weight:600;line-height:1.4;margin-bottom:6px">Strait of Hormuz closure</div>
+            <div style="font-size:11px;color:#555">See A/B-wallet consensus →</div>
+          </a>
+          <a href="/polymarket/markets/will-bitcoin-hit-150000-by-july-31/consensus" style="text-decoration:none;padding:16px 14px;background:#0f0f0f;border:1px solid #1e1e1e;border-left:3px solid #f7931a;border-radius:2px;display:block;transition:border-color .2s,background .2s" onmouseover="this.style.borderColor='#f7931a';this.style.background='#141414'" onmouseout="this.style.borderColor='#1e1e1e';this.style.borderLeftColor='#f7931a';this.style.background='#0f0f0f'">
+            <div style="font-size:10px;color:#f7931a;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;font-weight:700">BTC</div>
+            <div style="font-size:13px;color:#fff;font-weight:600;line-height:1.4;margin-bottom:6px">BTC $150k by July 31?</div>
+            <div style="font-size:11px;color:#555">See A/B-wallet consensus →</div>
+          </a>
+        </div>
+        <div style="text-align:center;margin-top:10px"><a href="/polymarket/divergence" style="font-size:11px;color:#00d4aa;letter-spacing:2px;text-transform:uppercase;font-family:'JetBrains Mono',monospace">See all divergence markets →</a></div>
+      </div>
+
       <div style="max-width:480px;margin:0 auto 28px auto;text-align:center">
         <form onsubmit="var w=document.getElementById('lb-wallet').value.trim();if(!w)return false;window.location.href='/polymarket/'+encodeURIComponent(w);return false" style="display:flex;gap:8px">
           <input id="lb-wallet" type="text" placeholder="Score any wallet — paste 0x address or username" style="flex:1;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:2px;padding:10px 14px;color:#fff;font-size:13px;outline:none;font-family:'JetBrains Mono','SF Mono',monospace" />
